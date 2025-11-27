@@ -106,7 +106,7 @@ $(K_OUT_DIR)/%.o: $(SRC_KERNEL)/%.asm
 
 $(OUT_DIR)/user/%.o: $(SRC_USER)/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
 user: lib $(USER_ELFS)
@@ -128,13 +128,18 @@ $(OUT_DIR)/user/hello.elf: $(OUT_DIR)/user/hello.o $(OUT_DIR)/user/syscall.o
 	@echo "Linking user ELF (hello, no -lc): $@"
 	@$(CC) -nostdlib -static $^ -o $@
 
+$(OUT_DIR)/user/malloc_printf_test.elf: $(OUT_DIR)/user/malloc_printf_test.o $(OUT_DIR)/user/syscall.o
+	@mkdir -p $(dir $@)
+	@echo "Linking user ELF: $@"
+	@$(CC) -nostdlib -static $^ $(BIN_LIB_DIR)/libc.a $(BIN_LIB_DIR)/libg.a -o $@
+
 lib:
 	@mkdir -p $(OUT_DIR)
 	@if [ -e "$(BIN_LIB_DIR)" ]; then \
 		echo "$(BIN_LIB_DIR) already exists"; \
 	else \
 		if [ -d "$(SRC_LIB)" ]; then \
-			ln -sfn ../../$(SRC_LIB) $(BIN_LIB_DIR); \
+			ln -sfn ../$(SRC_LIB) $(BIN_LIB_DIR); \
 			echo "Created symlink $(BIN_LIB_DIR) -> $(SRC_LIB)"; \
 		else \
 			mkdir -p $(BIN_LIB_DIR); \
@@ -170,7 +175,11 @@ $(EXT2_IMG): $(KERNEL)
 	@rm -f $(EXT2_IMG)
 	@echo "Creating FAT16 filesystem image..."
 	@mkdir -p bin/fs_tmp/kernel/fonts
+	@mkdir -p bin/fs_tmp/user
+	@mkdir -p bin/fs_tmp/lib
 	@cp -f $(FONTS) bin/fs_tmp/kernel/fonts/ 2>/dev/null || true
+	@cp -f bin/user/*.elf bin/fs_tmp/user/ 2>/dev/null || true
+	@cp -f bin/lib/* bin/fs_tmp/lib/ 2>/dev/null || true
 	@find bin -type f \
 		-not -name "*.o" \
 		-not -name "fs.img" \

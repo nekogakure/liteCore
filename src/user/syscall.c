@@ -18,6 +18,8 @@ enum {
 	SYS_lseek = 7,
 	SYS_open = 8,
 	SYS_isatty = 9,
+    SYS_getpid = 11,
+    SYS_kill = 12,
 };
 
 int __errno = 0;
@@ -128,4 +130,18 @@ int fstat(int fd, struct stat *st) {
 
 void *sbrk(ptrdiff_t increment) {
 	return _sbrk(increment);
+}
+
+int getpid(void) {
+	long r = syscall6(SYS_getpid, 0, 0, 0, 0, 0, 0);
+	return (int)r;
+}
+
+int kill(int pid, int sig) {
+	long r = syscall6(SYS_kill, pid, sig, 0, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return (int)r;
 }
