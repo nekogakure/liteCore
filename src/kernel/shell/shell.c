@@ -15,6 +15,7 @@ static int buffer_pos = 0;
 static void show_prompt(void) {
 	const char *cwd = get_current_directory();
 
+	/*
 	// パスから最後のディレクトリ名を抽出
 	const char *dir_name = cwd;
 	for (int i = 0; cwd[i] != '\0'; i++) {
@@ -22,12 +23,13 @@ static void show_prompt(void) {
 			dir_name = &cwd[i + 1];
 		}
 	}
+	*/
 
 	// ルートディレクトリの場合
 	if (cwd[0] == '/' && cwd[1] == '\0') {
 		printk("LiteCore@/ $ ");
 	} else {
-		printk("LiteCore@%s $ ", dir_name);
+		printk("LiteCore@%s $ ", cwd);
 	}
 }
 
