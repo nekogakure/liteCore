@@ -7,11 +7,9 @@
 #include <mem/map.h>
 #include <util/console.h>
 #include <util/io.h>
+#include <mem/manager.h>
 
-// ビットマップは1ビットで1フレームを表す。安全のための最大フレーム数
-#define MAX_FRAMES 8192 // 8192 * 4KB = 32MB
-
-static uint32_t bitmap[(MAX_FRAMES + 31) / 32];
+#define CHUNK_SIZE (1u << 20) /* 1 MiB per chunk */
 
 /* protect bitmap operations */
 static volatile uint32_t memmap_lock_storage = 0;
@@ -19,16 +17,71 @@ static volatile uint32_t memmap_lock_storage = 0;
 // 管理情報をまとめた構造体
 static memmap_t memmap = { 0 };
 
-static inline void bitmap_set(uint32_t idx) {
-	memmap.bitmap[idx / 32] |= (1u << (idx % 32));
+typedef struct chunk {
+	uint32_t idx;           // chunk index relative to memmap.start_frame
+	uint32_t *words;        // pointer to bitmap words (allocated with kmalloc)
+	struct chunk *next;
+} chunk_t;
+
+static chunk_t *chunk_head = NULL;
+
+static inline uint32_t frames_per_chunk(void) {
+	return CHUNK_SIZE / FRAME_SIZE;
 }
 
-static inline void bitmap_clear(uint32_t idx) {
-	memmap.bitmap[idx / 32] &= ~(1u << (idx % 32));
+static inline uint32_t chunk_word_count(void) {
+	uint32_t fpc = frames_per_chunk();
+	return (fpc + 31) / 32;
 }
 
-static inline int bitmap_test(uint32_t idx) {
-	return (memmap.bitmap[idx / 32] >> (idx % 32)) & 1u;
+/* find chunk by index */
+static chunk_t *find_chunk(uint32_t idx) {
+	chunk_t *c = chunk_head;
+	while (c) {
+		if (c->idx == idx)
+			return c;
+		c = c->next;
+	}
+	return NULL;
+}
+
+/* create chunk (allocate bitmap words and insert into list) */
+static chunk_t *create_chunk(uint32_t idx) {
+	chunk_t *c = (chunk_t *)kmalloc(sizeof(chunk_t));
+	if (!c)
+		return NULL;
+	uint32_t words = chunk_word_count();
+	uint32_t *w = (uint32_t *)kmalloc(words * sizeof(uint32_t));
+	if (!w) {
+		kfree(c);
+		return NULL;
+	}
+	for (uint32_t i = 0; i < words; ++i)
+		w[i] = 0; /* free=0 */
+	c->idx = idx;
+	c->words = w;
+	c->next = chunk_head;
+	chunk_head = c;
+	return c;
+}
+
+/* chunk bitmap ops */
+static inline int chunk_test(chunk_t *c, uint32_t local_idx) {
+	uint32_t w = local_idx / 32;
+	uint32_t b = local_idx % 32;
+	return (c->words[w] >> b) & 1u;
+}
+
+static inline void chunk_set(chunk_t *c, uint32_t local_idx) {
+	uint32_t w = local_idx / 32;
+	uint32_t b = local_idx % 32;
+	c->words[w] |= (1u << b);
+}
+
+static inline void chunk_clear(chunk_t *c, uint32_t local_idx) {
+	uint32_t w = local_idx / 32;
+	uint32_t b = local_idx % 32;
+	c->words[w] &= ~(1u << b);
 }
 
 /**
@@ -48,30 +101,32 @@ void memmap_init(uint32_t start, uint32_t end) {
 	}
 
 	count = end_frame - start_frame;
-	if (count > MAX_FRAMES) {
-		// 管理可能数を超える場合はトリムする
-		count = MAX_FRAMES;
-	}
 
-	// memmap構造体へ設定
+	// memmap構造体へ設定（チャンク方式では bitmap を使わない）
 	memmap.start_addr = start;
 	memmap.end_addr = end;
 	memmap.start_frame = start_frame;
 	memmap.frames = count;
-	memmap.max_frames = MAX_FRAMES;
-	memmap.bitmap = bitmap;
+	memmap.max_frames = count; /* logical max */
+	memmap.bitmap = NULL;
 
-	// ビットマップをクリア（0 = free）
+	/* clear any existing chunk list */
 	{
 		uint32_t flags = 0;
 		extern void spin_lock_irqsave(volatile uint32_t * lock,
-					      uint32_t * flagsptr);
+					  uint32_t * flagsptr);
 		extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 						   uint32_t flags);
 		spin_lock_irqsave(&memmap_lock_storage, &flags);
-		for (uint32_t i = 0; i < (memmap.frames + 31) / 32; ++i) {
-			memmap.bitmap[i] = 0;
+		chunk_t *c = chunk_head;
+		while (c) {
+			chunk_t *n = c->next;
+			if (c->words)
+				kfree(c->words);
+			kfree(c);
+			c = n;
 		}
+		chunk_head = NULL;
 		spin_unlock_irqrestore(&memmap_lock_storage, flags);
 	}
 #ifdef INIT_MSG
@@ -93,29 +148,52 @@ void *alloc_frame(void) {
 
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-				      uint32_t * flagsptr);
+					  uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
-	for (uint32_t i = 0; i < memmap.frames; ++i) {
-		if (!bitmap_test(i)) {
-			bitmap_set(i);
-			uint32_t frame_no = memmap.start_frame + i;
-			void *addr = (void *)(uintptr_t)(frame_no * FRAME_SIZE);
-			if (addr == NULL) {
-				printk("alloc_frame: computed addr is NULL frame_no=%u\n",
-				       (unsigned)frame_no);
-				spin_unlock_irqrestore(&memmap_lock_storage,
-						       flags);
-				return NULL;
+
+	uint32_t fpc = frames_per_chunk();
+	uint32_t max_frames = memmap.frames;
+	uint32_t max_chunk = (max_frames + fpc - 1) / fpc;
+
+	for (uint32_t chi = 0; chi < max_chunk; ++chi) {
+		chunk_t *c = find_chunk(chi);
+		if (!c) {
+			/* lazily create chunk */
+			c = create_chunk(chi);
+			if (!c)
+				continue; /* try next chunk */
+		}
+		/* scan words for a zero bit */
+		uint32_t words = chunk_word_count();
+		for (uint32_t w = 0; w < words; ++w) {
+			if (c->words[w] != 0xFFFFFFFFu) {
+				/* find free bit */
+				for (uint32_t b = 0; b < 32; ++b) {
+					uint32_t bit_idx = w * 32 + b;
+					if (bit_idx >= fpc)
+						break;
+					if (!chunk_test(c, bit_idx)) {
+						chunk_set(c, bit_idx);
+						uint32_t frame_no = memmap.start_frame + chi * fpc + bit_idx;
+						if (frame_no >= memmap.start_frame + memmap.frames) {
+							/* out of managed range */
+							chunk_clear(c, bit_idx);
+							spin_unlock_irqrestore(&memmap_lock_storage, flags);
+							return NULL;
+						}
+						void *addr = (void *)(uintptr_t)(frame_no * FRAME_SIZE);
+						spin_unlock_irqrestore(&memmap_lock_storage, flags);
+						return addr;
+					}
+				}
 			}
-			spin_unlock_irqrestore(&memmap_lock_storage, flags);
-			return addr;
 		}
 	}
-	spin_unlock_irqrestore(&memmap_lock_storage, flags);
 
-	return NULL; // 空き無し
+	spin_unlock_irqrestore(&memmap_lock_storage, flags);
+	return NULL; /* no free frames */
 }
 
 /**
@@ -130,7 +208,6 @@ void free_frame(void *addr) {
 
 	uintptr_t a = (uintptr_t)addr;
 	if (a % FRAME_SIZE != 0) {
-		// 境界不正
 		printk("MemoryMap: border is invalid: %lx", (unsigned long)a);
 		return;
 	}
@@ -145,16 +222,22 @@ void free_frame(void *addr) {
 		return;
 	}
 
-	{
-		uint32_t flags = 0;
-		extern void spin_lock_irqsave(volatile uint32_t * lock,
-					      uint32_t * flagsptr);
-		extern void spin_unlock_irqrestore(volatile uint32_t * lock,
-						   uint32_t flags);
-		spin_lock_irqsave(&memmap_lock_storage, &flags);
-		bitmap_clear(idx);
-		spin_unlock_irqrestore(&memmap_lock_storage, flags);
+	uint32_t fpc = frames_per_chunk();
+	uint32_t chi = idx / fpc;
+	uint32_t local = idx % fpc;
+
+	uint32_t flags = 0;
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+					  uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
+					   uint32_t flags);
+	spin_lock_irqsave(&memmap_lock_storage, &flags);
+	chunk_t *c = find_chunk(chi);
+	if (c) {
+		chunk_clear(c, local);
+		/* Note: we do not free empty chunk structures in this PoC */
 	}
+	spin_unlock_irqrestore(&memmap_lock_storage, flags);
 }
 
 /**
@@ -166,7 +249,7 @@ uint32_t frame_count(void) {
 	uint32_t f = 0;
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-				      uint32_t * flagsptr);
+					  uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
@@ -188,31 +271,34 @@ void memmap_reserve(uint32_t start, uint32_t end) {
 	uint32_t start_frame = start / FRAME_SIZE;
 	uint32_t end_frame = (end + FRAME_SIZE - 1) / FRAME_SIZE;
 
-	// 範囲を管理領域の相対インデックスに変換
 	if (end_frame <= memmap.start_frame)
 		return;
 	if (start_frame >= memmap.start_frame + memmap.frames)
 		return;
 
-	uint32_t s = (start_frame < memmap.start_frame) ?
-			     0 :
-			     (start_frame - memmap.start_frame);
-	uint32_t e = (end_frame > memmap.start_frame + memmap.frames) ?
-			     memmap.frames :
-			     (end_frame - memmap.start_frame);
+	uint32_t s = (start_frame < memmap.start_frame) ? 0 : (start_frame - memmap.start_frame);
+	uint32_t e = (end_frame > memmap.start_frame + memmap.frames) ? memmap.frames : (end_frame - memmap.start_frame);
 
-	{
-		uint32_t flags = 0;
-		extern void spin_lock_irqsave(volatile uint32_t * lock,
-					      uint32_t * flagsptr);
-		extern void spin_unlock_irqrestore(volatile uint32_t * lock,
-						   uint32_t flags);
-		spin_lock_irqsave(&memmap_lock_storage, &flags);
-		for (uint32_t i = s; i < e; ++i) {
-			bitmap_set(i);
+	uint32_t fpc = frames_per_chunk();
+
+	uint32_t flags = 0;
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+					  uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
+					   uint32_t flags);
+	spin_lock_irqsave(&memmap_lock_storage, &flags);
+	for (uint32_t idx = s; idx < e; ++idx) {
+		uint32_t chi = idx / fpc;
+		uint32_t local = idx % fpc;
+		chunk_t *c = find_chunk(chi);
+		if (!c) {
+			c = create_chunk(chi);
+			if (!c)
+				continue; /* best effort */
 		}
-		spin_unlock_irqrestore(&memmap_lock_storage, flags);
+		chunk_set(c, local);
 	}
+	spin_unlock_irqrestore(&memmap_lock_storage, flags);
 }
 
 /**

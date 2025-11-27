@@ -361,21 +361,18 @@ static void make_shortname(const char *name, char out[11]) {
 	}
 }
 
-/* Resolve an absolute path and copy the final directory entry into ent_buf (32 bytes).
- * If found, returns 0 and sets *parent_cluster_out to parent start cluster (0 for root)
- * and *ent_off to absolute byte offset of the entry. If not found but free slot exists,
- * returns -1 and sets *free_off to the free slot offset. On error returns -2.
- */
 static int fat16_resolve_path_bytes(struct fat16_super *sb, const char *path,
-				    uint8_t ent_buf[32], uint32_t *ent_off,
-				    uint32_t *free_off,
-				    uint16_t *parent_cluster_out) {
-	if (!path || path[0] != '/')
+				uint8_t ent_buf[32], uint32_t *ent_off,
+				uint32_t *free_off,
+				uint16_t *parent_cluster_out) {
+	if (!path)
 		return -2;
 	uint16_t dir_cluster = 0; /* root */
 	const char *p = path;
-	while (*p == '/')
-		p++;
+	if (p[0] == '/') {
+		while (*p == '/')
+			p++;
+	}
 	char comp[13];
 	while (*p) {
 		int ci = 0;
