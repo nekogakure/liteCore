@@ -150,6 +150,21 @@ static uint64_t sys_get_reent(uint64_t size) {
 	return (uint64_t)p;
 }
 
+static uint64_t sys_getpid(void) {
+	task_t *t = task_current();
+	if (!t) return (uint64_t)0;
+	return (uint64_t)t->tid;
+}
+
+static uint64_t sys_kill(uint64_t pid, uint64_t sig) {
+	(void)sig;
+	/* Minimal implementation: accept any pid and return success (0).
+	 * Full implementation would locate task by TID and signal it.
+	 */
+	(void)pid;
+	return 0;
+}
+
 static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 				 uint64_t a2, uint64_t a3, uint64_t a4,
 				 uint64_t a5) {
@@ -175,6 +190,10 @@ static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 		return sys_sbrk((intptr_t)a0);
 	case SYS_get_reent:
 		return sys_get_reent(a0);
+	case SYS_getpid:
+		return sys_getpid();
+	case SYS_kill:
+		return sys_kill(a0, a1);
 	default:
 		return (uint64_t)-1; /* ENOSYS */
 	}

@@ -13,6 +13,8 @@
 #define SYS_open 8
 #define SYS_isatty 9
 #define SYS_get_reent 10
+#define SYS_getpid 11
+#define SYS_kill 12
 
 void syscall_entry_c(uint64_t *regs_stack, uint32_t vec);
 
