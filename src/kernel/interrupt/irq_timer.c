@@ -3,6 +3,7 @@
 #include <task/multi_task.h>
 #include <driver/timer/apic.h>
 #include <stdint.h>
+#include "irq_trace.h"
 
 // IRQ 経路から呼ばれるスケジューラ関数（TCB のレジスタポインタを渡す）
 extern void task_schedule_from_irq(registers_t *irq_regs);
@@ -36,9 +37,10 @@ void irq_timer_entry(uint64_t *regs_stack) {
 		t->regs.rip = regs_stack[15];
 		t->regs.rflags = regs_stack[17];
 
-		uintptr_t saved_rsp =
-			(uintptr_t)regs_stack + (size_t)((15 + 3) * 8);
-		t->regs.rsp = saved_rsp;
+		/* RSP は RIP が置かれているスタック位置へのポインタとする
+		 * task_switch/task_restore が期待する形式に合わせて +8 を行う
+		 */
+		t->regs.rsp = (uint64_t)(&regs_stack[15]) + 8;
 
 		// CR3 は現在の CR3 を読み取って保存
 		uint64_t cr3val;
@@ -46,5 +48,9 @@ void irq_timer_entry(uint64_t *regs_stack) {
 		t->regs.cr3 = cr3val;
 	}
 
-	task_schedule_from_irq(&t->regs);
+	irq_trace_record_from_stack(regs_stack, 48);
+
+	if (t) {
+		task_schedule_from_irq(&t->regs);
+	}
 }

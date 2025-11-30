@@ -387,6 +387,12 @@ void task_schedule(void) {
 
 	irq_restore(flags);
 
+	/* 非 IRQ コンテキストでトレースバッファをダンプ（必要なら） */
+	extern void irq_trace_dump(void);
+	if (next_task == &idle_task) {
+		irq_trace_dump();
+	}
+
 	// コンテキストスイッチ（異なるタスクの場合のみ）
 	if (old_task != next_task) {
 		task_switch(&old_task->regs, &next_task->regs);
@@ -401,8 +407,6 @@ void task_exit(void) {
 
 	if (current_task) {
 		current_task->state = TASK_STATE_DEAD;
-		printk("task_exit: Task '%s' (TID=%u) exited\n",
-		       current_task->name, (unsigned)current_task->tid);
 	}
 
 	irq_restore(flags);
@@ -410,7 +414,6 @@ void task_exit(void) {
 	// スケジューラを呼んで次のタスクへ
 	task_schedule();
 
-	// ここには戻ってこない
 	while (1) {
 		asm volatile("hlt");
 	}
@@ -431,8 +434,6 @@ void task_yield(void) {
 void task_schedule_from_irq(registers_t *irq_regs) {
 	if (!scheduler_enabled || !current_task)
 		return;
-
-	/* IRQ コンテキストでは既に割り込みは無効化されているはず */
 
 	task_t *next_task = NULL;
 
@@ -471,13 +472,8 @@ void task_schedule_from_irq(registers_t *irq_regs) {
 	current_task = next_task;
 	next_task->state = TASK_STATE_RUNNING;
 
-	/* IRQ コンテキストでは既に元のレジスタは TCB に保存済みであるため
-	 * 古いレジスタを再保存する必要はない。直接新しいタスクを復元する。
-	 * irq_regs は呼び元で保存された current_task のレジスタへのポインタ。
-	 */
 	if (old_task != next_task) {
-		(void)irq_regs; /* 今の実装では current_task->regs に保存済みなので未使用 */
+		(void)irq_regs;
 		task_restore(&next_task->regs);
-		/* task_restore は新タスクへ復帰するため通常ここには戻らない */
 	}
 }

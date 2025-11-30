@@ -178,23 +178,17 @@ void vfs_register_builtin_backends(void) {
 int vfs_mount_with_cache(struct block_cache *cache) {
 	if (!cache)
 		return -1;
-	printk("vfs: attempting to mount %d registered backends\n",
-	       backend_count);
+
 	for (int i = 0; i < backend_count; ++i) {
 		void *sb = NULL;
 		if (!backends[i])
 			continue;
-		printk("vfs: trying backend %s\n", backends[i]->name);
 		int r = -1;
 		if (backends[i]->mount_with_cache)
 			r = backends[i]->mount_with_cache(cache, &sb);
-		printk("vfs: backend %s mount result %d\n", backends[i]->name,
-		       r);
 		if (r == 0) {
 			active_backend = backends[i];
 			active_sb = sb;
-			printk("vfs: mounted backend %s\n",
-			       active_backend->name);
 			return 0;
 		}
 	}

@@ -3,6 +3,7 @@
 #include <driver/timer/apic.h>
 #include <util/console.h>
 #include <stdint.h>
+#include "irq_trace.h"
 
 // スタックレイアウト (regs_stack のインデックス):
 // 0: RAX
@@ -50,14 +51,15 @@ void irq_preempt_entry(uint64_t *regs_stack, uint32_t vec) {
 		t->regs.rip = regs_stack[15];
 		t->regs.rflags = regs_stack[17];
 
-		// RSP は RIP が置かれているスタック位置へのポインタとする
-		t->regs.rsp = (uint64_t)(&regs_stack[15]);
+		t->regs.rsp = (uint64_t)(&regs_stack[15]) + 8;
 
 		// CR3 を読み取って保存
 		uint64_t cr3;
 		asm volatile("mov %%cr3, %0" : "=r"(cr3));
 		t->regs.cr3 = cr3;
 	}
+
+	irq_trace_record_from_stack(regs_stack, vec);
 
 	// タイマ割り込みベクタならタイマーハンドラを即時実行
 	if (vec == 48) {

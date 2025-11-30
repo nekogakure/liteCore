@@ -97,16 +97,8 @@ void task_yield(void);
  */
 extern void task_switch(registers_t *old_regs, registers_t *new_regs);
 
-// IRQ コンテキストから呼ばれるスケジューラヘルパー
-// irq_regs: IRQ スタックから保存した現在タスクのレジスタ
 void task_schedule_from_irq(registers_t *irq_regs);
 
-// IRQ コンテキストから直接スケジューリングを行う
-// この関数は irq_timer_entry 等の IRQ ハンドラから呼ばれる。
-// (task_schedule_from_irq は上で定義済み)
-
-// 新しいタスクのレジスタを即時復元して実行する（アセンブリ）
-// 引数: rdi = registers_t * (復元対象)
 extern void task_restore(registers_t *new_regs);
 
 #endif /* _TASK_TASK_H */
