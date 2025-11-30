@@ -49,10 +49,13 @@ extern irq_exception_ex
 global isr14
 isr14:
         PUSH_ALL
-        ; Error code is on stack before interrupt frame
-        ; In System V AMD64 ABI: rdi, rsi, rdx are first 3 args
-        mov edi, 14            ; arg1: vector
-        mov esi, [rsp + 120]   ; arg2: error_code (after 15 pushed regs)
+        ; // IRQスタブから直接プリエンプト用Cエントリを呼ぶ
+        mov rdi, rsp            ; // 第1引数: スタックポインタ (保存されたレジスタ配列)
+        mov rsi, 48             ; // 第2引数: ベクタ番号
+        extern irq_preempt_entry
+        call irq_preempt_entry
+        POP_ALL
+        iretq
         ; We don't have EIP in the same way, skip for now
         xor edx, edx           ; arg3: eip (placeholder)
         call irq_exception_ex
@@ -192,8 +195,9 @@ isr47:
 global isr48
 isr48:
         PUSH_ALL
-        mov edi, 48
-        call irq_handler_c
+        mov rdi, rsp
+        extern irq_timer_entry
+        call irq_timer_entry
         POP_ALL
         iretq
 

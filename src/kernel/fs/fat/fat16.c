@@ -362,9 +362,9 @@ static void make_shortname(const char *name, char out[11]) {
 }
 
 static int fat16_resolve_path_bytes(struct fat16_super *sb, const char *path,
-				uint8_t ent_buf[32], uint32_t *ent_off,
-				uint32_t *free_off,
-				uint16_t *parent_cluster_out) {
+				    uint8_t ent_buf[32], uint32_t *ent_off,
+				    uint32_t *free_off,
+				    uint16_t *parent_cluster_out) {
 	if (!path)
 		return -2;
 	uint16_t dir_cluster = 0; /* root */

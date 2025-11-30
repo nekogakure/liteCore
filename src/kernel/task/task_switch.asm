@@ -112,3 +112,57 @@ task_switch:
     
     ; 新しいタスクの RIP へジャンプ
     ret
+
+; (task_restore: single definition follows)
+
+; void task_restore(registers_t *new_regs)
+global task_restore
+task_restore:
+    ; rdi = new_regs
+    ; new_regs のアドレスを r15 に保持
+    mov r15, rdi
+
+    ; 新しい RIP と RSP を取得
+    mov r14, [r15 + REG_RIP]
+    mov r13, [r15 + REG_RSP]
+
+    ; CR3 をロード（異なる場合のみ）
+    mov rax, [r15 + REG_CR3]
+    mov rbx, cr3
+    cmp rax, rbx
+    je .skip_cr3_load_restore
+    mov cr3, rax
+.skip_cr3_load_restore:
+
+    ; RFLAGS を復元
+    mov rax, [r15 + REG_RFLAGS]
+    push rax
+    popfq
+
+    ; 汎用レジスタを復元
+    mov rax, [r15 + REG_RAX]
+    mov rbx, [r15 + REG_RBX]
+    mov rcx, [r15 + REG_RCX]
+    mov rdx, [r15 + REG_RDX]
+    mov rbp, [r15 + REG_RBP]
+    mov r8,  [r15 + REG_R8]
+    mov r9,  [r15 + REG_R9]
+    mov r10, [r15 + REG_R10]
+    mov r11, [r15 + REG_R11]
+    mov r12, [r15 + REG_R12]
+
+    ; RSI, RDI を復元
+    mov rsi, [r15 + REG_RSI]
+    mov rdi, [r15 + REG_RDI]
+
+    ; 新しいスタックに切り替え、戻り先(RIP)をプッシュ
+    mov rsp, r13
+    push r14
+
+    ; r13, r14, r15 を復元（最後に r15 を復元しても良い）
+    mov r13, [r15 + REG_R13]
+    mov r14, [r15 + REG_R14]
+    mov r15, [r15 + REG_R15]
+
+    ; 新しいタスクの RIP へジャンプ
+    ret

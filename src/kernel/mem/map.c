@@ -18,8 +18,8 @@ static volatile uint32_t memmap_lock_storage = 0;
 static memmap_t memmap = { 0 };
 
 typedef struct chunk {
-	uint32_t idx;           // chunk index relative to memmap.start_frame
-	uint32_t *words;        // pointer to bitmap words (allocated with kmalloc)
+	uint32_t idx; // chunk index relative to memmap.start_frame
+	uint32_t *words; // pointer to bitmap words (allocated with kmalloc)
 	struct chunk *next;
 } chunk_t;
 
@@ -114,7 +114,7 @@ void memmap_init(uint32_t start, uint32_t end) {
 	{
 		uint32_t flags = 0;
 		extern void spin_lock_irqsave(volatile uint32_t * lock,
-					  uint32_t * flagsptr);
+					      uint32_t * flagsptr);
 		extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 						   uint32_t flags);
 		spin_lock_irqsave(&memmap_lock_storage, &flags);
@@ -148,7 +148,7 @@ void *alloc_frame(void) {
 
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-					  uint32_t * flagsptr);
+				      uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
@@ -176,15 +176,25 @@ void *alloc_frame(void) {
 						break;
 					if (!chunk_test(c, bit_idx)) {
 						chunk_set(c, bit_idx);
-						uint32_t frame_no = memmap.start_frame + chi * fpc + bit_idx;
-						if (frame_no >= memmap.start_frame + memmap.frames) {
+						uint32_t frame_no =
+							memmap.start_frame +
+							chi * fpc + bit_idx;
+						if (frame_no >=
+						    memmap.start_frame +
+							    memmap.frames) {
 							/* out of managed range */
 							chunk_clear(c, bit_idx);
-							spin_unlock_irqrestore(&memmap_lock_storage, flags);
+							spin_unlock_irqrestore(
+								&memmap_lock_storage,
+								flags);
 							return NULL;
 						}
-						void *addr = (void *)(uintptr_t)(frame_no * FRAME_SIZE);
-						spin_unlock_irqrestore(&memmap_lock_storage, flags);
+						void *addr =
+							(void *)(uintptr_t)(frame_no *
+									    FRAME_SIZE);
+						spin_unlock_irqrestore(
+							&memmap_lock_storage,
+							flags);
 						return addr;
 					}
 				}
@@ -228,7 +238,7 @@ void free_frame(void *addr) {
 
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-					  uint32_t * flagsptr);
+				      uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
@@ -249,7 +259,7 @@ uint32_t frame_count(void) {
 	uint32_t f = 0;
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-					  uint32_t * flagsptr);
+				      uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
@@ -276,14 +286,18 @@ void memmap_reserve(uint32_t start, uint32_t end) {
 	if (start_frame >= memmap.start_frame + memmap.frames)
 		return;
 
-	uint32_t s = (start_frame < memmap.start_frame) ? 0 : (start_frame - memmap.start_frame);
-	uint32_t e = (end_frame > memmap.start_frame + memmap.frames) ? memmap.frames : (end_frame - memmap.start_frame);
+	uint32_t s = (start_frame < memmap.start_frame) ?
+			     0 :
+			     (start_frame - memmap.start_frame);
+	uint32_t e = (end_frame > memmap.start_frame + memmap.frames) ?
+			     memmap.frames :
+			     (end_frame - memmap.start_frame);
 
 	uint32_t fpc = frames_per_chunk();
 
 	uint32_t flags = 0;
 	extern void spin_lock_irqsave(volatile uint32_t * lock,
-					  uint32_t * flagsptr);
+				      uint32_t * flagsptr);
 	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);

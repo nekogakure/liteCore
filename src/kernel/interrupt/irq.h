@@ -13,5 +13,6 @@ int interrupt_raise(uint32_t event);
 int interrupt_dispatch_one(void);
 void interrupt_dispatch_all(void);
 void interrupt_init(void);
+void irq_preempt_entry(uint64_t *regs_stack, uint32_t vec);
 
 #endif /* _INTERRUPT_IRQ_H */

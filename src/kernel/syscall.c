@@ -49,7 +49,8 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	uint64_t new_end = current_brk + (uint64_t)inc;
 
 	uint32_t prev_page = (uint32_t)(current_brk & ~(PAGE_SIZE - 1));
-	uint32_t new_page_end = (uint32_t)((new_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+	uint32_t new_page_end =
+		(uint32_t)((new_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
 
 	uint32_t pages = 0;
 	if (new_page_end > prev_page)
@@ -62,7 +63,8 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	}
 
 	/* allocate all frames first */
-	uint32_t *allocated_phys = (uint32_t *)kmalloc(pages * sizeof(uint32_t));
+	uint32_t *allocated_phys =
+		(uint32_t *)kmalloc(pages * sizeof(uint32_t));
 	if (!allocated_phys)
 		return (uint64_t)-1;
 
@@ -71,7 +73,8 @@ static uint64_t sys_sbrk(intptr_t inc) {
 		if (!frm) {
 			/* allocation failed - free previously allocated frames */
 			for (uint32_t j = 0; j < i; ++j)
-				free_frame((void *)(uintptr_t)allocated_phys[j]);
+				free_frame(
+					(void *)(uintptr_t)allocated_phys[j]);
 			kfree(allocated_phys);
 			return (uint64_t)-1;
 		}
@@ -82,17 +85,21 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	uint32_t va = prev_page;
 	int map_failed = 0;
 	for (uint32_t i = 0; i < pages; ++i, va += PAGE_SIZE) {
-		if (map_page_pd((uint32_t)t->page_directory, allocated_phys[i], va,
-						PAGING_PRESENT | PAGING_RW | PAGING_USER) != 0) {
+		if (map_page_pd((uint32_t)t->page_directory, allocated_phys[i],
+				va, PAGING_PRESENT | PAGING_RW | PAGING_USER) !=
+		    0) {
 			map_failed = 1;
 			/* free remaining allocated frames */
 			for (uint32_t j = i; j < pages; ++j)
-				free_frame((void *)(uintptr_t)allocated_phys[j]);
+				free_frame(
+					(void *)(uintptr_t)allocated_phys[j]);
 			/* unmap and free already-mapped frames */
 			uint32_t un_va = prev_page;
 			for (uint32_t j = 0; j < i; ++j, un_va += PAGE_SIZE) {
-				unmap_page_pd((uint32_t)t->page_directory, un_va);
-				free_frame((void *)(uintptr_t)allocated_phys[j]);
+				unmap_page_pd((uint32_t)t->page_directory,
+					      un_va);
+				free_frame(
+					(void *)(uintptr_t)allocated_phys[j]);
 			}
 			break;
 		}
@@ -106,7 +113,7 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	/* success - bump break size and return old break */
 	uint64_t old_brk = current_brk;
 	t->user_brk_size = (uint64_t)(new_page_end - (uint32_t)t->user_brk) +
-					   (new_end - new_page_end);
+			   (new_end - new_page_end);
 	/* simpler: set size to new_end - base */
 	t->user_brk_size = new_end - t->user_brk;
 	return old_brk;
@@ -152,7 +159,8 @@ static uint64_t sys_get_reent(uint64_t size) {
 
 static uint64_t sys_getpid(void) {
 	task_t *t = task_current();
-	if (!t) return (uint64_t)0;
+	if (!t)
+		return (uint64_t)0;
 	return (uint64_t)t->tid;
 }
 
@@ -223,9 +231,12 @@ void syscall_entry_c(uint64_t *regs_stack, uint32_t vec) {
 	uint64_t a0 = rdi;
 	uint64_t a1 = rsi;
 	uint64_t a2 = rdx;
-	uint64_t a3 = r10; (void)a3;
-	uint64_t a4 = r8; (void)a4;
-	uint64_t a5 = r9; (void)a5;
+	uint64_t a3 = r10;
+	(void)a3;
+	uint64_t a4 = r8;
+	(void)a4;
+	uint64_t a5 = r9;
+	(void)a5;
 
 	uint64_t ret = dispatch_syscall(num, a0, a1, a2, a3, a4, a5);
 

@@ -18,8 +18,8 @@ enum {
 	SYS_lseek = 7,
 	SYS_open = 8,
 	SYS_isatty = 9,
-    SYS_getpid = 11,
-    SYS_kill = 12,
+	SYS_getpid = 11,
+	SYS_kill = 12,
 };
 
 int __errno = 0;

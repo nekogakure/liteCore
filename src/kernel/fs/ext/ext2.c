@@ -1287,7 +1287,7 @@ int ext2_resolve_path(struct ext2_super *sb, const char *path,
 		if (comp_idx == 1 && component[0] == '.') {
 			/* current_inodeは変更なし */
 		}
-		/* ".." は親ディレクトリ（簡易実装：ルートの場合はルートのまま） */
+		/* ".." は親ディレクトリ */
 		else if (comp_idx == 2 && component[0] == '.' &&
 			 component[1] == '.') {
 			/* TODO: 親ディレクトリの検索（現在は未実装） */

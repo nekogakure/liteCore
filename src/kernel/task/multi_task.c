@@ -9,6 +9,9 @@
 #include <string.h>
 #include <fs/vfs.h>
 
+// IRQ から直接タスクを復元するためのアセンブリ関数
+extern void task_restore(registers_t *new_regs);
+
 #define MAX_TASKS 64
 #define KERNEL_STACK_SIZE 0x4000 // 16KB
 #define USER_STACK_SIZE 0x4000 // 16KB
@@ -418,4 +421,63 @@ void task_exit(void) {
  */
 void task_yield(void) {
 	task_schedule();
+}
+
+/**
+ * @brief IRQ コンテキストから呼ばれるスケジューラ
+ * IRQ により current_task->regs は事前に保存されている想定
+ * （例: irq_timer_entry が regs_stack を TCB に書き込む）
+ */
+void task_schedule_from_irq(registers_t *irq_regs) {
+	if (!scheduler_enabled || !current_task)
+		return;
+
+	/* IRQ コンテキストでは既に割り込みは無効化されているはず */
+
+	task_t *next_task = NULL;
+
+	/* レディキューから次のタスクを取得 */
+	if (ready_queue_head) {
+		next_task = ready_queue_head;
+		ready_queue_head = next_task->next;
+		if (ready_queue_head == NULL) {
+			ready_queue_tail = NULL;
+		}
+		next_task->next = NULL;
+	}
+
+	if (!next_task) {
+		if (current_task->state == TASK_STATE_DEAD ||
+		    current_task != &idle_task) {
+			next_task = &idle_task;
+		} else {
+			/* 現在のタスクが idle で他に実行可能なタスクがない */
+			return;
+		}
+	}
+
+	if (current_task->state == TASK_STATE_RUNNING) {
+		current_task->state = TASK_STATE_READY;
+		if (ready_queue_tail) {
+			ready_queue_tail->next = current_task;
+			ready_queue_tail = current_task;
+		} else {
+			ready_queue_head = ready_queue_tail = current_task;
+		}
+		current_task->next = NULL;
+	}
+
+	task_t *old_task = current_task;
+	current_task = next_task;
+	next_task->state = TASK_STATE_RUNNING;
+
+	/* IRQ コンテキストでは既に元のレジスタは TCB に保存済みであるため
+	 * 古いレジスタを再保存する必要はない。直接新しいタスクを復元する。
+	 * irq_regs は呼び元で保存された current_task のレジスタへのポインタ。
+	 */
+	if (old_task != next_task) {
+		(void)irq_regs; /* 今の実装では current_task->regs に保存済みなので未使用 */
+		task_restore(&next_task->regs);
+		/* task_restore は新タスクへ復帰するため通常ここには戻らない */
+	}
 }

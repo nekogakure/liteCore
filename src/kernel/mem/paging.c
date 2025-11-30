@@ -100,7 +100,7 @@ int map_page(uint32_t phys, uint32_t virt, uint32_t flags) {
  * @return 0: 成功 -1: 失敗
  */
 int map_page_pd(uint32_t pd_phys, uint32_t phys, uint32_t virt,
-				uint32_t flags) {
+		uint32_t flags) {
 	if ((flags & PAGING_PRESENT) == 0)
 		flags |= PAGING_PRESENT;
 
@@ -110,7 +110,7 @@ int map_page_pd(uint32_t pd_phys, uint32_t phys, uint32_t virt,
 	uint32_t pd_virt = vmem_phys_to_virt(pd_phys);
 	if (pd_virt == 0) {
 		printk("map_page_pd: vmem_phys_to_virt returned 0 for pd_phys=0x%x\n",
-			   (unsigned)pd_phys);
+		       (unsigned)pd_phys);
 		return -1;
 	}
 
@@ -121,23 +121,25 @@ int map_page_pd(uint32_t pd_phys, uint32_t phys, uint32_t virt,
 		void *new_pt_virt = alloc_page_table();
 		if (!new_pt_virt) {
 			printk("map_page_pd: alloc_page_table failed for pd_idx=%u\n",
-				   (unsigned)pd_idx);
+			       (unsigned)pd_idx);
 			return -1;
 		}
-		uint32_t new_pt_phys = vmem_virt_to_phys((uint32_t)(uintptr_t)new_pt_virt);
+		uint32_t new_pt_phys =
+			vmem_virt_to_phys((uint32_t)(uintptr_t)new_pt_virt);
 		if (new_pt_phys == 0) {
 			printk("map_page_pd: vmem_virt_to_phys returned 0 for new_pt_virt=0x%x\n",
-				   (unsigned)(uintptr_t)new_pt_virt);
+			       (unsigned)(uintptr_t)new_pt_virt);
 			return -1;
 		}
-		pd[pd_idx] = (new_pt_phys & 0xFFFFF000) | (PAGING_PRESENT | PAGING_RW);
+		pd[pd_idx] = (new_pt_phys & 0xFFFFF000) |
+			     (PAGING_PRESENT | PAGING_RW);
 		pt = (uint32_t *)new_pt_virt;
 	} else {
 		uint32_t pt_phys = pde & 0xFFFFF000;
 		uint32_t pt_virt = vmem_phys_to_virt(pt_phys);
 		if (pt_virt == 0) {
 			printk("map_page_pd: vmem_phys_to_virt returned 0 for pt_phys=0x%x (pd_idx=%u)\n",
-				   (unsigned)pt_phys, (unsigned)pd_idx);
+			       (unsigned)pt_phys, (unsigned)pd_idx);
 			return -1;
 		}
 		pt = (uint32_t *)(uintptr_t)pt_virt;
@@ -159,7 +161,7 @@ int unmap_page_pd(uint32_t pd_phys, uint32_t virt) {
 	uint32_t pd_virt = vmem_phys_to_virt(pd_phys);
 	if (pd_virt == 0) {
 		printk("unmap_page_pd: vmem_phys_to_virt returned 0 for pd_phys=0x%x\n",
-			   (unsigned)pd_phys);
+		       (unsigned)pd_phys);
 		return -1;
 	}
 	uint32_t *pd = (uint32_t *)(uintptr_t)pd_virt;
@@ -171,7 +173,7 @@ int unmap_page_pd(uint32_t pd_phys, uint32_t virt) {
 	uint32_t pt_virt = vmem_phys_to_virt(pt_phys);
 	if (pt_virt == 0) {
 		printk("unmap_page_pd: vmem_phys_to_virt returned 0 for pt_phys=0x%x (pd_idx=%u)\n",
-			   (unsigned)pt_phys, (unsigned)pd_idx);
+		       (unsigned)pt_phys, (unsigned)pd_idx);
 		return -1;
 	}
 	uint32_t *pt = (uint32_t *)(uintptr_t)pt_virt;
