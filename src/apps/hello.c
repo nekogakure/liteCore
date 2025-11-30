@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 int main() {
 	printf("Hello, world!\n");
@@ -10,8 +11,8 @@ int main() {
 	char *buf = malloc(len);
 	if (!buf) {
 		printf("malloc failed\n");
-		return 1;
 	}
+        
 	snprintf(buf, len, "Allocated %zu bytes at %p", len, (void *)buf);
 	printf("%s\n", buf);
 
