@@ -387,12 +387,6 @@ void task_schedule(void) {
 
 	irq_restore(flags);
 
-	/* 非 IRQ コンテキストでトレースバッファをダンプ（必要なら） */
-	extern void irq_trace_dump(void);
-	if (next_task == &idle_task) {
-		irq_trace_dump();
-	}
-
 	// コンテキストスイッチ（異なるタスクの場合のみ）
 	if (old_task != next_task) {
 		task_switch(&old_task->regs, &next_task->regs);
