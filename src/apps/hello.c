@@ -1,0 +1,37 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main() {
+	printf("Hello, world!\n");
+	printf("This application is LiteCore's first app!\n");
+
+	size_t len = 64;
+	char *buf = malloc(len);
+	if (!buf) {
+		printf("malloc failed\n");
+		return 1;
+	}
+	snprintf(buf, len, "Allocated %zu bytes at %p", len, (void *)buf);
+	printf("%s\n", buf);
+
+	size_t newlen = 128;
+	char *tmp = realloc(buf, newlen);
+	if (!tmp) {
+		printf("realloc failed, freeing original buffer\n");
+		free(buf);
+		return 1;
+	}
+	buf = tmp;
+	size_t used = strlen(buf);
+	snprintf(buf + used, newlen - used, " (resized)");
+	printf("%s\n", buf);
+
+	free(buf);
+	buf = NULL;
+	printf("Memory freed\n");
+
+	printf("Goodbye! ;)\n");
+
+	return 0;
+}

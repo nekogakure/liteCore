@@ -56,10 +56,6 @@ void kmain(BOOT_INFO *boot_info) {
 	new_line();
 	printk("====== TESTS ======\n");
 	run_test();
-
-	// マルチタスクテストを実行
-	new_line();
-	multi_task_test();
 #endif /* TEST_TRUE */
 
 	new_line();

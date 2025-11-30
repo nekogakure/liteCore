@@ -305,7 +305,6 @@ void new_line() {
  * @brief 位置文字表示
  */
 static void console_putc(char ch) {
-	uint8_t attr = COLOR;
 
 	if (ch == '\n') {
 		new_line();

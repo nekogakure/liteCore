@@ -27,14 +27,13 @@ static int scheduler_enabled = 0;
 // idle タスク（常に実行可能）
 static task_t idle_task;
 
-/**
- * @brief idleタスクのエントリポイント
- */
+/*
 static void idle_task_entry(void) {
 	while (1) {
 		asm volatile("hlt");
 	}
 }
+*/
 
 /**
  * @brief 文字列コピー（簡易実装）

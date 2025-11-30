@@ -627,16 +627,14 @@ static int cmd_run(int argc, char **argv) {
 			uint8_t *dst = (uint8_t *)(uintptr_t)frame_virt;
 			/* calculate portion of file that maps into this page */
 			uint32_t page_va = dest_virt;
-			uint64_t copy_from;
 			if (page_va + 0x1000 <= vaddr) {
 				/* page before file data start */
-				copy_from = 0;
+				uint64_t copy_from = 0;
 			}
 			/* For simplicity, copy relevant bytes: */
 			uint64_t seg_file_end = off + filesz;
-			uint64_t src_off;
 			if ((uint64_t)page_va + 0x1000 <= vaddr) {
-				src_off = 0; /* nothing from file */
+				uint64_t src_off = 0; /* nothing from file */
 			} else {
 				/* overlapping region */
 				uint64_t file_page_offset = 0;

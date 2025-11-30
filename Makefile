@@ -41,7 +41,12 @@ USER_SOURCES = $(shell find $(SRC_USER) -name "*.c" \! -name "syscall.c")
 USER_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.o, $(USER_SOURCES)) | sort -u)
 USER_ELFS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.elf, $(USER_SOURCES)) | sort -u)
 
+## Determine apps source directory: prefer repo-root 'apps' if present, otherwise 'src/apps'
+ifeq ($(wildcard apps),apps)
 SRC_APPS = apps
+else
+SRC_APPS = $(SRC_DIR)/apps
+endif
 APP_OUT_DIR = $(OUT_DIR)/apps
 APP_SOURCES = $(shell if [ -d "$(SRC_APPS)" ]; then find $(SRC_APPS) -name "*.c"; fi)
 APP_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_APPS)/%.c, $(APP_OUT_DIR)/%.o, $(APP_SOURCES)) | sort -u)
@@ -121,28 +126,29 @@ $(APP_OUT_DIR)/%.o: $(SRC_APPS)/%.c
 	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
+# Build a small syscall shim for apps so newlib's syscalls/_sbrk/_exit etc
+# resolve to int 0x80 stubs implemented in src/user/syscall.c
+$(APP_OUT_DIR)/syscall.o: $(SRC_USER)/syscall.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+
+
 user: lib $(ALL_USER_ELFS) $(APP_ELFS)
 	@echo "Built user ELFs: $(ALL_USER_ELFS)"
 
 
 
-$(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o
+
+$(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o $(APP_OUT_DIR)/syscall.o
 	@mkdir -p $(dir $@)
 	@echo "Linking app ELF: $@"
 	@if [ -f "$(BIN_LIB_DIR)/libc.a" ]; then \
-		$(CC) -nostdlib -static $< $(USER_LDFLAGS) -o $@; \
+		$(CC) -nostdlib -static $^ $(USER_LDFLAGS) -o $@; \
 	else \
-		$(CC) -nostdlib -static $< -o $@; \
+		$(CC) -nostdlib -static $^ -o $@; \
 	fi
 
-$(OUT_DIR)/user/%.elf: $(OUT_DIR)/user/%.o
-	@mkdir -p $(dir $@)
-	@echo "Linking user ELF: $@"
-	@if [ -f "$(BIN_LIB_DIR)/libc.a" ]; then \
-		$(CC) -nostdlib -static $< $(USER_LDFLAGS) -o $@; \
-	else \
-		$(CC) -nostdlib -static $< -o $@; \
-	fi
+
 
 
 $(OUT_DIR)/usr/hello.elf: $(OUT_DIR)/usr/hello.o $(OUT_DIR)/usr/syscall.o
@@ -196,19 +202,30 @@ $(ESP_IMG): $(BOOTX64) $(KERNEL)
 $(EXT2_IMG): $(KERNEL)
 	@rm -f $(EXT2_IMG)
 	@echo "Creating FAT16 filesystem image..."
+	@rm -rf bin/fs_tmp || true
 	@mkdir -p bin/fs_tmp/kernel/fonts
 	@mkdir -p bin/fs_tmp/usr
 	@mkdir -p bin/fs_tmp/apps
 	@mkdir -p bin/fs_tmp/lib
 	@cp -f $(FONTS) bin/fs_tmp/kernel/fonts/ 2>/dev/null || true
-	@cp -f bin/usr/*.elf bin/fs_tmp/usr/ 2>/dev/null || true
-	@cp -f bin/apps/*.elf bin/fs_tmp/apps/ 2>/dev/null || true
+	@mkdir -p bin/fs_tmp/usr
+	@# remove stale user/app ELFs in bin to avoid leftover artifacts
+	@rm -f bin/usr/*.elf 2>/dev/null || true
+	@rm -f bin/apps/*.elf 2>/dev/null || true
+	@# copy only the ELFs we built (USER_ELFS and APP_ELFS)
+	@for f in $(USER_ELFS); do \
+		if [ -f "$$f" ]; then cp -f "$$f" bin/fs_tmp/usr/; fi; \
+	done || true
+	@for f in $(APP_ELFS); do \
+		if [ -f "$$f" ]; then cp -f "$$f" bin/fs_tmp/apps/; fi; \
+	done || true
 	@cp -f bin/lib/* bin/fs_tmp/lib/ 2>/dev/null || true
 	@find bin -type f \
 		-not -name "*.o" \
 		-not -name "fs.img" \
 		-not -path "bin/fs_tmp/*" \
 		-not -path "bin/usr/*" \
+		-not -path "bin/user/*" \
 		-exec bash -c 'dest="bin/fs_tmp/$${1#bin/}"; mkdir -p "$$(dirname "$$dest")"; cp "$$1" "$$dest"' _ {} \;
 	@mkdir -p bin/fs_tmp
 	@cp README.md bin/fs_tmp/README.md 2>/dev/null || true
