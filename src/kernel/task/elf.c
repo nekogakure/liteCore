@@ -51,11 +51,47 @@ int elf_run(const char *path) {
 	uint32_t size = 0;
 	int r = vfs_read_file_all(path, &buf, &size);
 	if (r != 0 || !buf || size < sizeof(Elf64_Ehdr)) {
-		if (buf)
+		if (buf) {
 			kfree(buf);
-		printk("elf_run: failed to read '%s' (err=%d)\n",
-		       path, r);
-		return -2;
+			buf = NULL;
+		}
+
+		int is_dir = 0;
+		int rr = vfs_resolve_path(path, &is_dir, &size);
+		if (rr != 0 || is_dir || size == 0) {
+			printk("elf_run: failed to read '%s' (err=%d)\n", path,
+			       r);
+			return -2;
+		}
+		buf = (void *)kmalloc((size_t)size + 1);
+		if (!buf) {
+			printk("elf_run: kmalloc failed for size %u\n", size);
+			return -2;
+		}
+		int fd = vfs_open(path, 0, 0);
+		if (fd < 0) {
+			printk("elf_run: vfs_open failed for '%s' (fd=%d)\n",
+			       path, fd);
+			kfree(buf);
+			return -2;
+		}
+		uint32_t read_total = 0;
+		while (read_total < size) {
+			int got = vfs_read(
+				fd, (void *)((uintptr_t)buf + read_total),
+				size - read_total);
+			if (got <= 0)
+				break;
+			read_total += (uint32_t)got;
+		}
+		vfs_close(fd);
+		if (read_total == 0) {
+			printk("elf_run: vfs_read returned 0 for '%s'\n", path);
+			kfree(buf);
+			return -2;
+		}
+		((uint8_t *)buf)[read_total] = '\0';
+		size = read_total;
 	}
 
 	Elf64_Ehdr *eh = (Elf64_Ehdr *)buf;

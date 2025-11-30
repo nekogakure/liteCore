@@ -27,10 +27,17 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 	uint32_t sectors = ((sb->max_root_entries + entries_per_sector - 1) /
 			    entries_per_sector);
 	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
-	if (!sec)
-		return -2;
 	uint8_t shortname[11];
 	make_shortname(name, (char *)shortname);
+	/* Debug: log the requested shortname for lookup */
+	{
+		char dbgname[12];
+		for (int i = 0; i < 11; ++i)
+			dbgname[i] = shortname[i] ? shortname[i] : ' ';
+		dbgname[11] = '\0';
+		printk("fat16: find_root_entry looking for '%s' (orig='%s')\n",
+		       dbgname, name);
+	}
 	uint32_t first_free_off = 0xFFFFFFFF;
 	for (uint32_t s = 0; s < sectors; ++s) {
 		if (fat16_read_sector(sb, root_sector + s, sec) != 0) {
@@ -99,6 +106,7 @@ static int fat16_find_entry_in_dir_bytes(struct fat16_super *sb,
 					 uint32_t *free_off) {
 	uint8_t shortname[11];
 	make_shortname(name, (char *)shortname);
+	
 	uint32_t entries_per_sector = sb->bytes_per_sector / 32;
 	uint32_t first_free_off = 0xFFFFFFFF;
 	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
