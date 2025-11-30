@@ -37,9 +37,17 @@ SOURCES    = $(shell find $(SRC_KERNEL) -name "*.c")
 ASM_SOURCES = $(shell find $(SRC_KERNEL) -name "*.asm")
 OBJECTS    = $(shell printf "%s\n" $(patsubst $(SRC_KERNEL)/%.c, $(K_OUT_DIR)/%.o, $(SOURCES)) $(patsubst $(SRC_KERNEL)/%.asm, $(K_OUT_DIR)/%.o, $(ASM_SOURCES)) | sort -u)
 
-USER_SOURCES = $(shell find $(SRC_USER) -name "*.c")
+USER_SOURCES = $(shell find $(SRC_USER) -name "*.c" \! -name "syscall.c")
 USER_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.o, $(USER_SOURCES)) | sort -u)
 USER_ELFS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.elf, $(USER_SOURCES)) | sort -u)
+
+SRC_APPS = apps
+APP_OUT_DIR = $(OUT_DIR)/apps
+APP_SOURCES = $(shell if [ -d "$(SRC_APPS)" ]; then find $(SRC_APPS) -name "*.c"; fi)
+APP_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_APPS)/%.c, $(APP_OUT_DIR)/%.o, $(APP_SOURCES)) | sort -u)
+APP_ELFS = $(shell printf "%s\n" $(patsubst $(SRC_APPS)/%.c, $(APP_OUT_DIR)/%.elf, $(APP_SOURCES)) | sort -u)
+
+ALL_USER_ELFS = $(USER_ELFS) $(APP_ELFS)
 
 BIN_LIB_DIR = $(OUT_DIR)/lib
 USER_LDFLAGS ?= -L$(BIN_LIB_DIR) -lc
@@ -108,10 +116,24 @@ $(OUT_DIR)/usr/%.o: $(SRC_USER)/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
+$(APP_OUT_DIR)/%.o: $(SRC_APPS)/%.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
-user: lib $(USER_ELFS)
-	@echo "Built user ELFs: $(USER_ELFS)"
 
+user: lib $(ALL_USER_ELFS) $(APP_ELFS)
+	@echo "Built user ELFs: $(ALL_USER_ELFS)"
+
+
+
+$(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o
+	@mkdir -p $(dir $@)
+	@echo "Linking app ELF: $@"
+	@if [ -f "$(BIN_LIB_DIR)/libc.a" ]; then \
+		$(CC) -nostdlib -static $< $(USER_LDFLAGS) -o $@; \
+	else \
+		$(CC) -nostdlib -static $< -o $@; \
+	fi
 
 $(OUT_DIR)/user/%.elf: $(OUT_DIR)/user/%.o
 	@mkdir -p $(dir $@)
@@ -176,9 +198,11 @@ $(EXT2_IMG): $(KERNEL)
 	@echo "Creating FAT16 filesystem image..."
 	@mkdir -p bin/fs_tmp/kernel/fonts
 	@mkdir -p bin/fs_tmp/usr
+	@mkdir -p bin/fs_tmp/apps
 	@mkdir -p bin/fs_tmp/lib
 	@cp -f $(FONTS) bin/fs_tmp/kernel/fonts/ 2>/dev/null || true
 	@cp -f bin/usr/*.elf bin/fs_tmp/usr/ 2>/dev/null || true
+	@cp -f bin/apps/*.elf bin/fs_tmp/apps/ 2>/dev/null || true
 	@cp -f bin/lib/* bin/fs_tmp/lib/ 2>/dev/null || true
 	@find bin -type f \
 		-not -name "*.o" \
