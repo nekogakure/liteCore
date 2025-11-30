@@ -200,6 +200,31 @@ static int cmd_change_dir(int argc, char **argv) {
 		return -1;
 	}
 	const char *path = argv[1];
+	char fullpath[256];
+	if (path[0] == '/') {
+		/* absolute */
+		int i = 0;
+		for (; i < (int)sizeof(fullpath) - 1 && path[i]; ++i)
+			fullpath[i] = path[i];
+		fullpath[i] = '\0';
+	} else {
+		int i = 0;
+		if (current_path[0] == '/' && current_path[1] == '\0') {
+			fullpath[i++] = '/';
+		} else {
+			for (int j = 0;
+			     current_path[j] && i < (int)sizeof(fullpath) - 1;
+			     ++j)
+				fullpath[i++] = current_path[j];
+		}
+		if (i > 0 && fullpath[i - 1] != '/' && fullpath[0] != '\0') {
+			if (i < (int)sizeof(fullpath) - 1)
+				fullpath[i++] = '/';
+		}
+		for (int j = 0; path[j] && i < (int)sizeof(fullpath) - 1; ++j)
+			fullpath[i++] = path[j];
+		fullpath[i] = '\0';
+	}
 	/* Build absolute path from current_path and provided path, normalize '.' and '..' */
 	char tmp[256];
 	/* If path is absolute, start from it */
@@ -544,145 +569,37 @@ static int cmd_run(int argc, char **argv) {
 		return -1;
 	}
 	const char *path = argv[1];
-	void *buf = NULL;
-	uint32_t size = 0;
-	int r = vfs_read_file_all(path, &buf, &size);
-	if (r != 0 || !buf || size < sizeof(Elf64_Ehdr)) {
-		printk("run: failed to read '%s' (err=%d)\n", path, r);
-		if (buf)
-			kfree(buf);
-		return -1;
-	}
-
-	Elf64_Ehdr *eh = (Elf64_Ehdr *)buf;
-	if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' ||
-	    eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F') {
-		printk("run: not an ELF: %s\n", path);
-		kfree(buf);
-		return -1;
-	}
-
-	/* create user-mode task but do NOT ready it until mapping is done */
-	task_t *t = task_create((void *)0x0, path, 0);
-	if (!t) {
-		printk("run: task_create failed\n");
-		kfree(buf);
-		return -1;
-	}
-
-	uint32_t pd_phys = (uint32_t)t->page_directory;
-	if (pd_phys == 0) {
-		printk("run: invalid page directory for task\n");
-		kfree(buf);
-		return -1;
-	}
-
-	/* parse program headers and map PT_LOAD segments */
-	Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)buf + eh->e_phoff);
-	for (int i = 0; i < eh->e_phnum; ++i) {
-		if (ph[i].p_type != 1) /* PT_LOAD */
-			continue;
-
-		Elf64_Addr vaddr = (Elf64_Addr)ph[i].p_vaddr;
-		uint64_t filesz = (uint64_t)ph[i].p_filesz;
-		uint64_t memsz = (uint64_t)ph[i].p_memsz;
-		uint64_t off = (uint64_t)ph[i].p_offset;
-
-		/* round down vaddr to page, handle offset inside page */
-		uint32_t page_off = (uint32_t)(vaddr & 0xFFF);
-		uint32_t map_start = (uint32_t)(vaddr & ~0xFFFUL);
-		uint32_t to_map =
-			(uint32_t)(((page_off + memsz) + 0xFFF) & ~0xFFFUL);
-
-		uint32_t pages = to_map / 0x1000;
-		for (uint32_t p = 0; p < pages; ++p) {
-			void *frame = alloc_frame();
-			if (!frame) {
-				printk("run: alloc_frame failed for segment\n");
-				kfree(buf);
-				return -1;
-			}
-			uint32_t phys = (uint32_t)(uintptr_t)frame;
-			uint32_t dest_virt = map_start + p * 0x1000;
-
-			/* map the page into the new page directory */
-			int mf = map_page_pd(pd_phys, phys, dest_virt,
-					     PAGING_PRESENT | PAGING_RW |
-						     PAGING_USER);
-			if (mf != 0) {
-				printk("run: map_page_pd failed for va=0x%x\n",
-				       dest_virt);
-				kfree(buf);
-				return -1;
-			}
-
-			/* copy file data into mapped physical frame (via virt) */
-			uint32_t frame_virt = vmem_phys_to_virt(phys);
-			if (frame_virt == 0) {
-				printk("run: vmem_phys_to_virt failed for phys=0x%x\n",
-				       phys);
-				kfree(buf);
-				return -1;
-			}
-			uint8_t *dst = (uint8_t *)(uintptr_t)frame_virt;
-			/* calculate portion of file that maps into this page */
-			uint32_t page_va = dest_virt;
-			if (page_va + 0x1000 <= vaddr) {
-				/* page before file data start */
-				uint64_t copy_from = 0;
-			}
-			/* For simplicity, copy relevant bytes: */
-			uint64_t seg_file_end = off + filesz;
-			if ((uint64_t)page_va + 0x1000 <= vaddr) {
-				uint64_t src_off = 0; /* nothing from file */
-			} else {
-				/* overlapping region */
-				uint64_t file_page_offset = 0;
-				if (vaddr > (uint64_t)page_va)
-					file_page_offset = 0;
-				else
-					file_page_offset =
-						(uint64_t)(page_va - vaddr);
-				uint64_t src = off + file_page_offset;
-				uint64_t max_copy = 0;
-				if (src < seg_file_end) {
-					max_copy = seg_file_end - src;
-					if (max_copy > 0x1000)
-						max_copy = 0x1000;
-					/* copy from buf[src .. src+max_copy) to dst[offset_in_page] */
-					uint32_t dst_off =
-						(uint32_t)((vaddr > page_va) ?
-								   (vaddr -
-								    page_va) :
-								   0);
-					uint8_t *srcp =
-						(uint8_t *)buf + (size_t)src;
-					for (uint32_t z = 0;
-					     z < (uint32_t)max_copy; ++z)
-						dst[dst_off + z] = srcp[z];
-					/* zero the rest */
-					for (uint32_t z = dst_off +
-							  (uint32_t)max_copy;
-					     z < 0x1000; ++z)
-						dst[z] = 0;
-				} else {
-					/* entirely zero page */
-					for (uint32_t z = 0; z < 0x1000; ++z)
-						dst[z] = 0;
-				}
-			}
+	char fullpath[256];
+	if (path[0] == '/') {
+		int i = 0;
+		for (; i < (int)sizeof(fullpath) - 1 && path[i]; ++i)
+			fullpath[i] = path[i];
+		fullpath[i] = '\0';
+	} else {
+		int i = 0;
+		if (current_path[0] == '/' && current_path[1] == '\0') {
+			fullpath[i++] = '/';
+		} else {
+			for (int j = 0;
+			     current_path[j] && i < (int)sizeof(fullpath) - 1;
+			     ++j)
+				fullpath[i++] = current_path[j];
 		}
+		if (i > 0 && fullpath[i - 1] != '/' && fullpath[0] != '\0') {
+			if (i < (int)sizeof(fullpath) - 1)
+				fullpath[i++] = '/';
+		}
+		for (int j = 0; path[j] && i < (int)sizeof(fullpath) - 1; ++j)
+			fullpath[i++] = path[j];
+		fullpath[i] = '\0';
 	}
-
-	/* set entry point (truncate to 32-bit virtual address) */
-	uint32_t entry = (uint32_t)(eh->e_entry & 0xFFFFFFFFu);
-	t->regs.rip = (uint64_t)entry;
-
-	/* mark task ready */
-	task_ready(t);
-	kfree(buf);
-	printk("run: started '%s' (TID=%u) entry=0x%x\n", path,
-	       (unsigned)t->tid, entry);
+	/* delegate ELF loading to shared loader */
+	extern int elf_run(const char *path);
+	int rc = elf_run(fullpath);
+	if (rc != 0) {
+		printk("run: elf_run failed (rc=%d)\n", rc);
+		return -1;
+	}
 	return 0;
 }
 

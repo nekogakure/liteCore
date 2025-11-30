@@ -3,17 +3,15 @@
 #include <stddef.h>
 
 // コマンドの最大数
-#define MAX_COMMANDS 32
+#define MAX_COMMANDS 128
 // 引数の最大数
-#define MAX_ARGS 16
+#define MAX_ARGS 64
 // コマンドラインバッファの最大サイズ
 #define CMD_BUFFER_SIZE 256
 
 // 登録されたコマンドのリスト
 static shell_command_t command_list[MAX_COMMANDS];
 static int command_count = 0;
-
-// 文字列操作のヘルパー関数
 
 /**
  * @brief 文字列の長さを取得
@@ -198,8 +196,6 @@ void list_commands(void) {
 void init_commands(void) {
 	command_count = 0;
 }
-
-// 組み込みコマンドの実装
 
 /**
  * @brief helpコマンド - 利用可能なコマンドを表示
