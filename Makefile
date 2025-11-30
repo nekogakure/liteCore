@@ -37,7 +37,7 @@ SOURCES    = $(shell find $(SRC_KERNEL) -name "*.c")
 ASM_SOURCES = $(shell find $(SRC_KERNEL) -name "*.asm")
 OBJECTS    = $(shell printf "%s\n" $(patsubst $(SRC_KERNEL)/%.c, $(K_OUT_DIR)/%.o, $(SOURCES)) $(patsubst $(SRC_KERNEL)/%.asm, $(K_OUT_DIR)/%.o, $(ASM_SOURCES)) | sort -u)
 
-USER_SOURCES = $(shell find $(SRC_USER) -name "*.c" \! -name "syscall.c")
+USER_SOURCES = $(shell find $(SRC_USER) -name "*.c" \! -name "syscall.c" \! -name "stdio_stub.c")
 USER_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.o, $(USER_SOURCES)) | sort -u)
 USER_ELFS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.elf, $(USER_SOURCES)) | sort -u)
 
@@ -131,15 +131,29 @@ $(APP_OUT_DIR)/%.o: $(SRC_APPS)/%.c
 $(APP_OUT_DIR)/syscall.o: $(SRC_USER)/syscall.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+	ifeq ($(wildcard $(SRC_USER)/crt.asm),$(SRC_USER)/crt.asm)
+	CRT_SRC = $(SRC_USER)/crt.asm
+	else
+	CRT_SRC = $(SRC_USER)/crt.S
+	endif
+
+$(APP_OUT_DIR)/crt.o: $(CRT_SRC)
+	@mkdir -p $(dir $@)
+	@if [ "$(suffix $(CRT_SRC))" = ".asm" ]; then \
+		$(NASM) -f elf64 $(CRT_SRC) -o $@; \
+	else \
+		$(CC) $(CFLAGS) -c $(CRT_SRC) -o $@; \
+	fi
+
+$(APP_OUT_DIR)/stdio.o: $(SRC_USER)/stdio_stub.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
 user: lib $(ALL_USER_ELFS) $(APP_ELFS)
 	@echo "Built user ELFs: $(ALL_USER_ELFS)"
 
-
-
-
-$(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o $(APP_OUT_DIR)/syscall.o
+$(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o $(APP_OUT_DIR)/syscall.o $(APP_OUT_DIR)/crt.o $(APP_OUT_DIR)/stdio.o
 	@mkdir -p $(dir $@)
 	@echo "Linking app ELF: $@"
 	@if [ -f "$(BIN_LIB_DIR)/libc.a" ]; then \
@@ -147,9 +161,6 @@ $(APP_OUT_DIR)/%.elf: $(APP_OUT_DIR)/%.o $(APP_OUT_DIR)/syscall.o
 	else \
 		$(CC) -nostdlib -static $^ -o $@; \
 	fi
-
-
-
 
 $(OUT_DIR)/usr/hello.elf: $(OUT_DIR)/usr/hello.o $(OUT_DIR)/usr/syscall.o
 	@mkdir -p $(dir $@)
@@ -199,7 +210,7 @@ $(ESP_IMG): $(BOOTX64) $(KERNEL)
 	@rmdir $(OUT_DIR)/.mnt
 	@echo "ESP image created: $(ESP_IMG)"
 
-$(EXT2_IMG): $(KERNEL)
+$(EXT2_IMG): $(KERNEL) user
 	@rm -f $(EXT2_IMG)
 	@echo "Creating FAT16 filesystem image..."
 	@rm -rf bin/fs_tmp || true
@@ -209,9 +220,8 @@ $(EXT2_IMG): $(KERNEL)
 	@mkdir -p bin/fs_tmp/lib
 	@cp -f $(FONTS) bin/fs_tmp/kernel/fonts/ 2>/dev/null || true
 	@mkdir -p bin/fs_tmp/usr
-	@# remove stale user/app ELFs in bin to avoid leftover artifacts
-	@rm -f bin/usr/*.elf 2>/dev/null || true
-	@rm -f bin/apps/*.elf 2>/dev/null || true
+	@rm -f bin/fs_tmp/usr/*.elf 2>/dev/null || true
+	@rm -f bin/fs_tmp/apps/*.elf 2>/dev/null || true
 	@# copy only the ELFs we built (USER_ELFS and APP_ELFS)
 	@for f in $(USER_ELFS); do \
 		if [ -f "$$f" ]; then cp -f "$$f" bin/fs_tmp/usr/; fi; \

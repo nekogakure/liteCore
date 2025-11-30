@@ -12,8 +12,9 @@ int main() {
 	if (!buf) {
 		printf("malloc failed\n");
 	}
-        
-	snprintf(buf, len, "Allocated %zu bytes at %p", len, (void *)buf);
+
+	uintptr_t addr = (uintptr_t)buf;
+	snprintf(buf, len, "Allocated %zu bytes at 0x%zx", len, (size_t)addr);
 	printf("%s\n", buf);
 
 	size_t newlen = 128;
