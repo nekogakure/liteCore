@@ -1,0 +1,22 @@
+{
+    "files.exclude": {
+            "**/newlib": true,
+            "**/uefi": true,
+            "**/.zed": true
+    },
+    "search.exclude": {
+            "**/newlib": true,
+            "**/docs": true,
+            "**/uefi": true,
+    },
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/newlib/**": true,
+        "**/uefi/**": true
+    },
+
+    "[c]": {
+            "editor.tabSize": 8,
+            "editor.formatOnSave": true,
+    },
+}
