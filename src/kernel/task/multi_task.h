@@ -40,10 +40,6 @@ typedef struct task {
 	uint64_t user_stack; // ユーザースタックポインタ
 	uint64_t page_directory; // ページディレクトリの物理アドレス
 
-	/* per-task heap (brk) tracking for simple sbrk implementation
-	 * user_brk: base address returned on first sbrk allocation
-	 * user_brk_size: total allocated bytes for this task's heap
-	 */
 	uint64_t user_brk;
 	uint64_t user_brk_size;
 	uint64_t time_slice; // タイムスライス（ticks）

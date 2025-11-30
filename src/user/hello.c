@@ -1,13 +1,22 @@
-#include <stddef.h>
-#include <sys/types.h>
-#include <stdint.h>
-
-extern ssize_t write(int fd, const void *buf, size_t count);
-extern void _exit(int status);
+#include <stdio.h>
+#include <stdlib.h>
 
 int main(void) {
-	const char msg[] = "Hello from user\n";
-	write(1, msg, sizeof(msg) - 1);
-	_exit(0);
-	return 0;
+    printf("malloc_printf_test: start\n");
+
+    void *p = malloc(128);
+    if (!p) {
+        printf("malloc_printf_test: malloc failed\n");
+        return 1;
+    }
+    ((char *)p)[0] = 'H';
+    ((char *)p)[1] = 'i';
+    ((char *)p)[2] = '\0';
+
+    printf("allocated buffer at %p contains: %s\n", p, (char *)p);
+
+    free(p);
+
+    printf("malloc_printf_test: done\n");
+    return 0;
 }

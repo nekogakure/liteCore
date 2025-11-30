@@ -9,6 +9,10 @@
 #endif
 #include <device/pci.h>
 #include <stdint.h>
+#include <task/multi_task.h>
+#include <mem/paging.h>
+#include <string.h>
+#include <mem/vmem.h>
 
 // 現在のディレクトリパス（簡易実装）
 static char current_path[256] = "/";
@@ -498,6 +502,192 @@ static int cmd_devices(int argc, char **argv) {
 	return 0;
 }
 
+/* Minimal ELF loader for ELF64 program headers -> map PT_LOAD into new task PD */
+typedef unsigned long Elf64_Addr;
+typedef unsigned long Elf64_Off;
+typedef uint16_t Elf64_Half;
+typedef uint32_t Elf64_Word;
+typedef uint64_t Elf64_Xword;
+
+typedef struct {
+	unsigned char e_ident[16];
+	Elf64_Half e_type;
+	Elf64_Half e_machine;
+	Elf64_Word e_version;
+	Elf64_Addr e_entry;
+	Elf64_Off e_phoff;
+	Elf64_Off e_shoff;
+	Elf64_Word e_flags;
+	Elf64_Half e_ehsize;
+	Elf64_Half e_phentsize;
+	Elf64_Half e_phnum;
+	Elf64_Half e_shentsize;
+	Elf64_Half e_shnum;
+	Elf64_Half e_shstrndx;
+} Elf64_Ehdr;
+
+typedef struct {
+	Elf64_Word p_type;
+	Elf64_Word p_flags;
+	Elf64_Off p_offset;
+	Elf64_Addr p_vaddr;
+	Elf64_Addr p_paddr;
+	Elf64_Xword p_filesz;
+	Elf64_Xword p_memsz;
+	Elf64_Xword p_align;
+} Elf64_Phdr;
+
+/* runコマンド - ELF をロードしてユーザータスクを作る */
+static int cmd_run(int argc, char **argv) {
+	if (argc < 2) {
+		printk("Usage: run <path-to-elf>\n");
+		return -1;
+	}
+	const char *path = argv[1];
+	void *buf = NULL;
+	uint32_t size = 0;
+	int r = vfs_read_file_all(path, &buf, &size);
+	if (r != 0 || !buf || size < sizeof(Elf64_Ehdr)) {
+		printk("run: failed to read '%s' (err=%d)\n", path, r);
+		if (buf)
+			kfree(buf);
+		return -1;
+	}
+
+	Elf64_Ehdr *eh = (Elf64_Ehdr *)buf;
+	if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' ||
+	    eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F') {
+		printk("run: not an ELF: %s\n", path);
+		kfree(buf);
+		return -1;
+	}
+
+	/* create user-mode task but do NOT ready it until mapping is done */
+	task_t *t = task_create((void *)0x0, path, 0);
+	if (!t) {
+		printk("run: task_create failed\n");
+		kfree(buf);
+		return -1;
+	}
+
+	uint32_t pd_phys = (uint32_t)t->page_directory;
+	if (pd_phys == 0) {
+		printk("run: invalid page directory for task\n");
+		kfree(buf);
+		return -1;
+	}
+
+	/* parse program headers and map PT_LOAD segments */
+	Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)buf + eh->e_phoff);
+	for (int i = 0; i < eh->e_phnum; ++i) {
+		if (ph[i].p_type != 1) /* PT_LOAD */
+			continue;
+
+		Elf64_Addr vaddr = (Elf64_Addr)ph[i].p_vaddr;
+		uint64_t filesz = (uint64_t)ph[i].p_filesz;
+		uint64_t memsz = (uint64_t)ph[i].p_memsz;
+		uint64_t off = (uint64_t)ph[i].p_offset;
+
+		/* round down vaddr to page, handle offset inside page */
+		uint32_t page_off = (uint32_t)(vaddr & 0xFFF);
+		uint32_t map_start = (uint32_t)(vaddr & ~0xFFFUL);
+		uint32_t to_map =
+			(uint32_t)(((page_off + memsz) + 0xFFF) & ~0xFFFUL);
+
+		uint32_t pages = to_map / 0x1000;
+		for (uint32_t p = 0; p < pages; ++p) {
+			void *frame = alloc_frame();
+			if (!frame) {
+				printk("run: alloc_frame failed for segment\n");
+				kfree(buf);
+				return -1;
+			}
+			uint32_t phys = (uint32_t)(uintptr_t)frame;
+			uint32_t dest_virt = map_start + p * 0x1000;
+
+			/* map the page into the new page directory */
+			int mf = map_page_pd(pd_phys, phys, dest_virt,
+					     PAGING_PRESENT | PAGING_RW |
+						     PAGING_USER);
+			if (mf != 0) {
+				printk("run: map_page_pd failed for va=0x%x\n",
+				       dest_virt);
+				kfree(buf);
+				return -1;
+			}
+
+			/* copy file data into mapped physical frame (via virt) */
+			uint32_t frame_virt = vmem_phys_to_virt(phys);
+			if (frame_virt == 0) {
+				printk("run: vmem_phys_to_virt failed for phys=0x%x\n",
+				       phys);
+				kfree(buf);
+				return -1;
+			}
+			uint8_t *dst = (uint8_t *)(uintptr_t)frame_virt;
+			/* calculate portion of file that maps into this page */
+			uint32_t page_va = dest_virt;
+			uint64_t copy_from;
+			if (page_va + 0x1000 <= vaddr) {
+				/* page before file data start */
+				copy_from = 0;
+			}
+			/* For simplicity, copy relevant bytes: */
+			uint64_t seg_file_end = off + filesz;
+			uint64_t src_off;
+			if ((uint64_t)page_va + 0x1000 <= vaddr) {
+				src_off = 0; /* nothing from file */
+			} else {
+				/* overlapping region */
+				uint64_t file_page_offset = 0;
+				if (vaddr > (uint64_t)page_va)
+					file_page_offset = 0;
+				else
+					file_page_offset =
+						(uint64_t)(page_va - vaddr);
+				uint64_t src = off + file_page_offset;
+				uint64_t max_copy = 0;
+				if (src < seg_file_end) {
+					max_copy = seg_file_end - src;
+					if (max_copy > 0x1000)
+						max_copy = 0x1000;
+					/* copy from buf[src .. src+max_copy) to dst[offset_in_page] */
+					uint32_t dst_off =
+						(uint32_t)((vaddr > page_va) ?
+								   (vaddr -
+								    page_va) :
+								   0);
+					uint8_t *srcp =
+						(uint8_t *)buf + (size_t)src;
+					for (uint32_t z = 0;
+					     z < (uint32_t)max_copy; ++z)
+						dst[dst_off + z] = srcp[z];
+					/* zero the rest */
+					for (uint32_t z = dst_off +
+							  (uint32_t)max_copy;
+					     z < 0x1000; ++z)
+						dst[z] = 0;
+				} else {
+					/* entirely zero page */
+					for (uint32_t z = 0; z < 0x1000; ++z)
+						dst[z] = 0;
+				}
+			}
+		}
+	}
+
+	/* set entry point (truncate to 32-bit virtual address) */
+	uint32_t entry = (uint32_t)(eh->e_entry & 0xFFFFFFFFu);
+	t->regs.rip = (uint64_t)entry;
+
+	/* mark task ready */
+	task_ready(t);
+	kfree(buf);
+	printk("run: started '%s' (TID=%u) entry=0x%x\n", path,
+	       (unsigned)t->tid, entry);
+	return 0;
+}
+
 /**
  * @brief 拡張コマンドを登録
  */
@@ -510,4 +700,5 @@ void register_extended_commands(void) {
 	register_command("cd", "Change directory", cmd_change_dir);
 	register_command("pwd", "Print working directory", cmd_pwd);
 	register_command("devices", "List connected devices", cmd_devices);
+	register_command("run", "Run user ELF: run <path>", cmd_run);
 }

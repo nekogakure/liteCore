@@ -214,8 +214,8 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 		// スタックの初期化：entry関数が戻る先としてtask_exitをpush
 		// task_switch は ret 命令で task->regs.rip にジャンプする
 		// entry 関数が ret で戻る時、スタックの task_exit にジャンプする
-		uint64_t *stack_ptr =
-			(uint64_t *)kstack_virt; // スタック最上位から開始
+		uint64_t *stack_ptr = (uint64_t *)(uintptr_t)
+			kstack_virt; // スタック最上位から開始
 		stack_ptr--; // 8バイト下げる
 		*stack_ptr = (uint64_t)task_exit; // entry から戻る先
 
@@ -234,22 +234,46 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 		}
 		task->page_directory = pd_phys;
 
-		// ユーザースタックを確保（TODO: ユーザー空間にマップ）
+		/* ユーザースタックを確保して新しいページディレクトリにマップする
+		 * 以前はフレームを確保してカーネル仮想アドレスをそのまま user_stack に
+		 * 保持していたが、CR3 を切り替えるとそのカーネル仮想アドレスは有効
+		 * でないためページフォルトの原因になっていた。
+		 * ここでは確保した物理フレームをユーザ空間の固定仮想アドレス
+		 * (USER_STACK_VA) にマップして、そのアドレスを RSP に設定する。
+		 */
 		void *ustack = alloc_frame();
 		if (!ustack) {
 			printk("task_create: Failed to allocate user stack\n");
 			return NULL;
 		}
-		uint32_t ustack_virt =
-			vmem_phys_to_virt((uint32_t)(uintptr_t)ustack) + 0x1000;
-		task->user_stack = ustack_virt;
+		uint32_t ustack_phys = (uint32_t)(uintptr_t)ustack;
+
+		/* 単一ページの簡易実装: ユーザースタックはここでは1ページ分のみ割り当て */
+		const uint32_t USER_STACK_VA = 0xBFFFE000u;
+		int map_res = map_page_pd(
+			(uint32_t)pd_phys, ustack_phys, USER_STACK_VA,
+			PAGING_PRESENT | PAGING_RW | PAGING_USER);
+		if (map_res != 0) {
+			printk("task_create: Failed to map user stack into PD (err=%d)\n",
+			       map_res);
+			return NULL;
+		}
+
+		/* カーネルからアクセスしてゼロクリアしておく */
+		uint32_t frame_virt = vmem_phys_to_virt(ustack_phys);
+		if (frame_virt != 0) {
+			memset((void *)(uintptr_t)frame_virt, 0, 0x1000);
+		}
+
+		/* ユーザースタックのトップ（RSP に設定する値） */
+		task->user_stack = (uint64_t)(USER_STACK_VA + 0x1000);
 
 		/* init per-task brk */
 		task->user_brk = 0;
 		task->user_brk_size = 0;
 
 		// レジスタを初期化
-		task->regs.rsp = ustack_virt;
+		task->regs.rsp = task->user_stack;
 		task->regs.rip = (uint64_t)entry;
 		task->regs.rflags = 0x202; // IF=1
 		task->regs.cr3 = pd_phys;
