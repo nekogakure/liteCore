@@ -4,3 +4,4 @@ bin/
 *.log
 *.elf
 *.iso
+*.img
