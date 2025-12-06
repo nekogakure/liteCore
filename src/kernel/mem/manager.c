@@ -164,7 +164,7 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			/* Calculate actual user bytes allocated (might be larger than wanted) */
 			uint32_t actual_user_bytes =
 				cur->size - sizeof(block_header_t);
-			
+
 			uint32_t total_free = 0;
 			uint32_t largest = 0;
 			block_header_t *it = free_list;
@@ -188,13 +188,15 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			}
 
 			/* Place canary at end of allocated space (before alignment padding) */
-			uint32_t *canary =
-				(uint32_t *)((uintptr_t)user_ptr + wanted_with_canary - sizeof(uint32_t));
+			uint32_t *canary = (uint32_t *)((uintptr_t)user_ptr +
+							wanted_with_canary -
+							sizeof(uint32_t));
 			*canary = KMALLOC_CANARY;
 			if (size >= 256) {
 				printk("mem: set canary at %p (user_ptr=%p wanted=%u wanted_with_canary=%u actual_allocated=%u) value=0x%08x\n",
-				       canary, user_ptr,
-				       wanted, wanted_with_canary, actual_user_bytes, *canary);
+				       canary, user_ptr, wanted,
+				       wanted_with_canary, actual_user_bytes,
+				       *canary);
 			}
 			spin_unlock_irqrestore(&heap_lock, flags);
 			return user_ptr;
@@ -257,8 +259,7 @@ void kfree(void *ptr) {
 			hdr->size - sizeof(block_header_t);
 		uint32_t *canary =
 			(uint32_t *)((uintptr_t)hdr + sizeof(block_header_t) +
-				     user_bytes_with_canary -
-				     sizeof(uint32_t));
+				     user_bytes_with_canary - sizeof(uint32_t));
 		if (*canary != KMALLOC_CANARY) {
 			uint32_t got = *canary;
 			uint32_t tag = hdr->tag;
@@ -269,9 +270,10 @@ void kfree(void *ptr) {
 			uint8_t *user_ptr =
 				(uint8_t *)hdr + sizeof(block_header_t);
 			uint8_t *ctx_start =
-				user_ptr + (user_bytes_with_canary > 16 ?
-						    user_bytes_with_canary - 16 :
-						    0);
+				user_ptr +
+				(user_bytes_with_canary > 16 ?
+					 user_bytes_with_canary - 16 :
+					 0);
 			uint32_t ctx_len = (user_bytes_with_canary > 16) ?
 						   24 :
 						   (user_bytes_with_canary + 8);
