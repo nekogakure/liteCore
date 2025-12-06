@@ -37,7 +37,8 @@ struct vfs_file {
 	void *sb; /* backend superblock pointer */
 	char path[256];
 	uint8_t *buf; /* full file contents cached */
-	uint32_t buf_size;
+	uint32_t buf_size; /* actual file content size */
+	uint32_t buf_allocated; /* allocated buffer size (for safety checks) */
 	uint32_t offset;
 };
 
@@ -318,15 +319,17 @@ int vfs_read(int fd, void *buf, size_t len) {
 			/* Read entire file into buffer */
 			if (vf->buf_size > 0 && active_backend &&
 			    active_backend->read_file) {
-				/* Allocate with padding for canary safety */
-				uint32_t alloc_size = vf->buf_size + 64;
+				/* No extra padding needed - kmalloc handles canary internally */
+				uint32_t alloc_size = vf->buf_size;
 				vf->buf = (uint8_t *)kmalloc(alloc_size);
 				if (!vf->buf) {
 					printk("vfs: failed to allocate %u bytes for '%s'\n",
 					       alloc_size, vf->path);
 					return -1;
 				}
+				vf->buf_allocated = alloc_size;
 				size_t out_len = 0;
+				/* Pass file size as max read length */
 				int rret = active_backend->read_file(
 					active_sb, vf->path, vf->buf,
 					vf->buf_size, &out_len);
@@ -380,6 +383,7 @@ int vfs_open(const char *pathname, int flags, int mode) {
 	vf->sb = active_sb;
 	vf->buf = NULL;
 	vf->buf_size = 0;
+	vf->buf_allocated = 0;
 	vf->offset = 0;
 	int i = 0;
 	for (; i < (int)sizeof(vf->path) - 1 && pathname[i]; ++i)

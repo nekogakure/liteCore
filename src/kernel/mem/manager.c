@@ -76,7 +76,7 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 	if (size == 0 || free_list == NULL) {
 		return NULL;
 	}
-	
+
 	/* Prevent infinite recursion */
 	if (retry_count > 3) {
 		printk("mem: kmalloc retry limit exceeded\n");
@@ -88,8 +88,11 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 
 	uint32_t wanted = align_up(size);
 
-	// ブロック全体の必要サイズ
-	uint32_t total_size = wanted + sizeof(block_header_t);
+	/* Add space for canary at the end, then align the total */
+	uint32_t wanted_with_canary = align_up(wanted + sizeof(uint32_t));
+
+	// ブロック全体の必要サイズ (header + user data + canary, aligned)
+	uint32_t total_size = wanted_with_canary + sizeof(block_header_t);
 
 	block_header_t *prev = NULL;
 	block_header_t *cur = free_list;
@@ -125,7 +128,7 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			cur = cur->next;
 			continue;
 		}
-		
+
 		if (cur->size >= total_size) {
 			if (cur->size >=
 			    total_size + sizeof(block_header_t) + ALIGN) {
@@ -158,11 +161,10 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			void *user_ptr = (void *)((uintptr_t)cur +
 						  sizeof(block_header_t));
 
-			/* Compute remaining free totals and largest contiguous block
-			 * while still holding the heap_lock to avoid races. We avoid
-			 * calling heap_free_bytes()/heap_largest_free_block() here
-			 * because they would try to take the same lock.
-			 */
+			/* Calculate actual user bytes allocated (might be larger than wanted) */
+			uint32_t actual_user_bytes =
+				cur->size - sizeof(block_header_t);
+			
 			uint32_t total_free = 0;
 			uint32_t largest = 0;
 			block_header_t *it = free_list;
@@ -185,18 +187,15 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 				       user_ptr, total_free, largest);
 			}
 
-			if (wanted >= sizeof(uint32_t)) {
-				uint32_t *canary =
-					(uint32_t *)((uintptr_t)user_ptr +
-						     wanted - sizeof(uint32_t));
-				*canary = KMALLOC_CANARY;
-				if (size >= 256) {
-					printk("mem: set canary at %p (user_ptr=%p wanted=%u) value=0x%08x\n",
-					       canary, user_ptr, wanted,
-					       *canary);
-				}
+			/* Place canary at end of allocated space (before alignment padding) */
+			uint32_t *canary =
+				(uint32_t *)((uintptr_t)user_ptr + wanted_with_canary - sizeof(uint32_t));
+			*canary = KMALLOC_CANARY;
+			if (size >= 256) {
+				printk("mem: set canary at %p (user_ptr=%p wanted=%u wanted_with_canary=%u actual_allocated=%u) value=0x%08x\n",
+				       canary, user_ptr,
+				       wanted, wanted_with_canary, actual_user_bytes, *canary);
 			}
-
 			spin_unlock_irqrestore(&heap_lock, flags);
 			return user_ptr;
 		}
@@ -207,7 +206,7 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 
 	// 見つからなかった - ヒープを拡張してリトライ
 	spin_unlock_irqrestore(&heap_lock, flags);
-	
+
 	uint32_t expand_size = total_size;
 	if (expand_size < 0x100000) /* 1MB minimum */
 		expand_size = 0x100000;
@@ -252,12 +251,14 @@ void kfree(void *ptr) {
 	}
 
 	// フリーリストに挿入（アドレス順に保つ）
-	if (hdr->size > sizeof(block_header_t) &&
-	    hdr->size - sizeof(block_header_t) >= sizeof(uint32_t)) {
-		uint32_t user_bytes = hdr->size - sizeof(block_header_t);
+	/* Check canary: it's placed at user_area_end - 4 bytes */
+	if (hdr->size > sizeof(block_header_t) + sizeof(uint32_t)) {
+		uint32_t user_bytes_with_canary =
+			hdr->size - sizeof(block_header_t);
 		uint32_t *canary =
 			(uint32_t *)((uintptr_t)hdr + sizeof(block_header_t) +
-				     user_bytes - sizeof(uint32_t));
+				     user_bytes_with_canary -
+				     sizeof(uint32_t));
 		if (*canary != KMALLOC_CANARY) {
 			uint32_t got = *canary;
 			uint32_t tag = hdr->tag;
@@ -265,17 +266,17 @@ void kfree(void *ptr) {
 			       ptr, hdr, hdr->size, tag,
 			       (unsigned)KMALLOC_CANARY, (unsigned)got);
 
-			uint32_t user_bytes =
-				hdr->size - sizeof(block_header_t);
 			uint8_t *user_ptr =
 				(uint8_t *)hdr + sizeof(block_header_t);
 			uint8_t *ctx_start =
-				user_ptr +
-				(user_bytes > 16 ? user_bytes - 16 : 0);
-			uint32_t ctx_len = (user_bytes > 16) ? 24 :
-							       (user_bytes + 8);
-			if (ctx_len > user_bytes + 8)
-				ctx_len = user_bytes + 8;
+				user_ptr + (user_bytes_with_canary > 16 ?
+						    user_bytes_with_canary - 16 :
+						    0);
+			uint32_t ctx_len = (user_bytes_with_canary > 16) ?
+						   24 :
+						   (user_bytes_with_canary + 8);
+			if (ctx_len > user_bytes_with_canary + 8)
+				ctx_len = user_bytes_with_canary + 8;
 			if (ctx_len > 64)
 				ctx_len = 64;
 			printk("mem: dumping %u bytes around canary (hex): ",
@@ -337,12 +338,12 @@ static int heap_expand(uint32_t additional_size) {
 	 * Instead, directly use the memory at heap_end_addr (identity-mapped).
 	 * Physical frame reservation can be done separately if needed.
 	 */
-	
+
 	uintptr_t new_block_addr = heap_end_addr;
-	
+
 	printk("mem: heap_expand creating block at 0x%08x size=%u (direct allocation, no frame alloc)\n",
 	       (uint32_t)new_block_addr, additional_size);
-	
+
 	uint32_t flags = 0;
 	spin_lock_irqsave(&heap_lock, &flags);
 
@@ -359,13 +360,13 @@ static int heap_expand(uint32_t additional_size) {
 	} else {
 		block_header_t *prev = NULL;
 		block_header_t *cur = free_list;
-		
+
 		/* Find insertion point to maintain address order */
 		while (cur && (uintptr_t)cur < (uintptr_t)new_block) {
 			prev = cur;
 			cur = cur->next;
 		}
-		
+
 		if (prev == NULL) {
 			/* Insert at head */
 			new_block->next = free_list;
@@ -376,20 +377,22 @@ static int heap_expand(uint32_t additional_size) {
 			new_block->next = prev->next;
 			prev->next = new_block;
 			printk("mem: heap_expand inserted after 0x%p\n", prev);
-			
+
 			/* Try to merge with previous block if adjacent */
 			uintptr_t prev_end = (uintptr_t)prev + prev->size;
 			if (prev_end == (uintptr_t)new_block) {
 				printk("mem: heap_expand merging with previous block\n");
 				prev->size += new_block->size;
 				prev->next = new_block->next;
-				new_block = prev; /* For potential merge with next */
+				new_block =
+					prev; /* For potential merge with next */
 			}
 		}
-		
+
 		/* Try to merge with next block if adjacent */
 		if (new_block->next) {
-			uintptr_t new_end = (uintptr_t)new_block + new_block->size;
+			uintptr_t new_end =
+				(uintptr_t)new_block + new_block->size;
 			if (new_end == (uintptr_t)new_block->next) {
 				printk("mem: heap_expand merging with next block\n");
 				block_header_t *next = new_block->next;
