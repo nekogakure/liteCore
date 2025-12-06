@@ -237,7 +237,7 @@ def main(argv=None):
                    help="create a raw USB image (.img) in addition to ISO; path or filename (requires sudo). Default: LiteCore.img")
     p.add_argument("--no-usb-img", action="store_true",
                    help="do not create a raw USB image (disable automatic creation)")
-    p.add_argument("--usb-size", type=int, default=256, help="size in MiB for raw USB image (default: 256)")
+    p.add_argument("--usb-size", type=int, default=512, help="size in MiB for raw USB image (default: 256)")
     args = p.parse_args(argv)
 
     repo_root = Path(args.bin_dir).resolve()
