@@ -9,17 +9,17 @@
 #endif
 
 enum {
+	/* Use x86_64 syscall numbers */
+	SYS_read = 0,
 	SYS_write = 1,
-	SYS_exit = 2,
-	SYS_sbrk = 3,
-	SYS_read = 4,
-	SYS_close = 5,
-	SYS_fstat = 6,
-	SYS_lseek = 7,
-	SYS_open = 8,
-	SYS_isatty = 9,
-	SYS_getpid = 11,
-	SYS_kill = 12,
+	SYS_open = 2,
+	SYS_close = 3,
+	SYS_fstat = 5,
+	SYS_lseek = 8,
+	SYS_brk = 12,
+	SYS_getpid = 39,
+	SYS_kill = 62,
+	SYS_exit = 60,
 };
 
 int __errno = 0;
@@ -36,7 +36,7 @@ static inline long syscall6(long n, long a1, long a2, long a3, long a4, long a5,
 	register long r10 asm("r10") = a4;
 	register long r8 asm("r8") = a5;
 	register long r9 asm("r9") = a6;
-	asm volatile("int $0x80"
+	asm volatile("syscall"
 		     : "+a"(rax)
 		     : "D"(rdi), "S"(rsi), "d"(rdx), "r"(r10), "r"(r8), "r"(r9)
 		     : "rcx", "r11", "memory");
@@ -59,12 +59,18 @@ void _exit(int status) {
 }
 
 void *_sbrk(ptrdiff_t increment) {
-	long r = syscall6(SYS_sbrk, increment, 0, 0, 0, 0, 0);
-	if (r == (long)-1) {
+	/* brk(0) returns current program break; then set to current+increment */
+	long cur = syscall6(SYS_brk, 0, 0, 0, 0, 0, 0);
+	if (cur == (long)-1) {
 		errno = ENOMEM;
 		return (void *)-1;
 	}
-	return (void *)r;
+	long new = syscall6(SYS_brk, cur + increment, 0, 0, 0, 0, 0);
+	if (new == (long)-1) {
+		errno = ENOMEM;
+		return (void *)-1;
+	}
+	return (void *)cur;
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {

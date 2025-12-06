@@ -1082,7 +1082,7 @@ int ext2_create_file(struct ext2_super *sb, const char *path, uint16_t mode,
 		root_inode.i_size += sb->block_size;
 	}
 
-	uint8_t *block = (uint8_t *)kmalloc(sb->block_size);
+	uint8_t *block = (uint8_t *)kmalloc(sb->block_size + 4);
 	if (!block)
 		return -9;
 	if (block_cache_read(sb->cache, root_inode.i_block[0], block) != 0) {

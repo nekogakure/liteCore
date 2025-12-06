@@ -28,8 +28,8 @@ CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable -ffre
 LDFLAGS    = -m elf_x86_64 -z max-page-size=0x1000
 
 NFLAGS     = -f bin
-QEMU_FLAGS = -serial stdio -display none -monitor none \
-             -bios /usr/share/ovmf/OVMF.fd -d int,guest_errors -D qemu.log --no-reboot
+QEMU_FLAGS = -m 128M -serial stdio -display none -monitor none \
+			-bios /usr/share/ovmf/OVMF.fd -d int,guest_errors -D qemu.log --no-reboot
 QEMU_VGA   = 
 CONSOLE    = -display curses
 
@@ -41,7 +41,8 @@ USER_SOURCES = $(shell find $(SRC_USER) -name "*.c" \! -name "syscall.c" \! -nam
 USER_OBJECTS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.o, $(USER_SOURCES)) | sort -u)
 USER_ELFS = $(shell printf "%s\n" $(patsubst $(SRC_USER)/%.c, $(OUT_DIR)/usr/%.elf, $(USER_SOURCES)) | sort -u)
 
-## Determine apps source directory: prefer repo-root 'apps' if present, otherwise 'src/apps'
+CRT_SRC = $(SRC_USER)/crt.asm
+
 ifeq ($(wildcard apps),apps)
 SRC_APPS = apps
 else
@@ -126,16 +127,9 @@ $(APP_OUT_DIR)/%.o: $(SRC_APPS)/%.c
 	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
-# Build a small syscall shim for apps so newlib's syscalls/_sbrk/_exit etc
-# resolve to int 0x80 stubs implemented in src/user/syscall.c
 $(APP_OUT_DIR)/syscall.o: $(SRC_USER)/syscall.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
-	ifeq ($(wildcard $(SRC_USER)/crt.asm),$(SRC_USER)/crt.asm)
-	CRT_SRC = $(SRC_USER)/crt.asm
-	else
-	CRT_SRC = $(SRC_USER)/crt.S
-	endif
 
 $(APP_OUT_DIR)/crt.o: $(CRT_SRC)
 	@mkdir -p $(dir $@)
@@ -222,7 +216,6 @@ $(EXT2_IMG): $(KERNEL) user
 	@mkdir -p bin/fs_tmp/usr
 	@rm -f bin/fs_tmp/usr/*.elf 2>/dev/null || true
 	@rm -f bin/fs_tmp/apps/*.elf 2>/dev/null || true
-	@# copy only the ELFs we built (USER_ELFS and APP_ELFS)
 	@for f in $(USER_ELFS); do \
 		if [ -f "$$f" ]; then cp -f "$$f" bin/fs_tmp/usr/; fi; \
 	done || true

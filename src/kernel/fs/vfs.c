@@ -276,6 +276,7 @@ int vfs_write(int fd, const void *buf, size_t len) {
 int vfs_read(int fd, void *buf, size_t len) {
 	if (buf == NULL)
 		return -1;
+	printk("vfs: vfs_read called fd=%d len=%u\n", fd, (uint32_t)len);
 	if (fd == 0) {
 		char *out = (char *)buf;
 		size_t i;
@@ -300,32 +301,50 @@ int vfs_read(int fd, void *buf, size_t len) {
 		struct vfs_file *vf = open_files[global_idx];
 		if (!vf)
 			return -1;
-		/* ensure buffer is populated */
-		if (!vf->buf && active_backend && active_backend->read_file) {
-			uint32_t sz = 0;
-			if (active_backend->get_file_size)
-				active_backend->get_file_size(active_sb,
-							      vf->path, &sz);
-			if (sz > 0) {
-				vf->buf = (uint8_t *)kmalloc(sz);
-				if (!vf->buf)
+
+		/* Lazy load: read entire file on first access and cache it */
+		if (!vf->buf) {
+			/* Get file size if not known */
+			if (vf->buf_size == 0 && active_backend &&
+			    active_backend->get_file_size) {
+				uint32_t sz = 0;
+				int gret = active_backend->get_file_size(
+					active_sb, vf->path, &sz);
+				if (gret == 0 && sz > 0) {
+					vf->buf_size = sz;
+				}
+			}
+
+			/* Read entire file into buffer */
+			if (vf->buf_size > 0 && active_backend &&
+			    active_backend->read_file) {
+				/* Allocate with padding for canary safety */
+				uint32_t alloc_size = vf->buf_size + 64;
+				vf->buf = (uint8_t *)kmalloc(alloc_size);
+				if (!vf->buf) {
+					printk("vfs: failed to allocate %u bytes for '%s'\n",
+					       alloc_size, vf->path);
 					return -1;
+				}
 				size_t out_len = 0;
-				if (active_backend->read_file(
-					    active_sb, vf->path, vf->buf, sz,
-					    &out_len) != 0) {
+				int rret = active_backend->read_file(
+					active_sb, vf->path, vf->buf,
+					vf->buf_size, &out_len);
+				if (rret != 0) {
+					printk("vfs: read_file failed for '%s'\n",
+					       vf->path);
 					kfree(vf->buf);
 					vf->buf = NULL;
 					return -1;
 				}
-				vf->buf_size = (uint32_t)sz;
-			} else {
-				vf->buf = NULL;
-				vf->buf_size = 0;
+				vf->buf_size = (uint32_t)out_len;
 			}
 		}
+
+		/* Read from cached buffer */
 		if (!vf->buf)
 			return 0;
+
 		uint32_t avail = vf->buf_size > vf->offset ?
 					 vf->buf_size - vf->offset :
 					 0;
@@ -371,6 +390,17 @@ int vfs_open(const char *pathname, int flags, int mode) {
 	if (global_idx < 0) {
 		kfree(vf);
 		return -1;
+	}
+
+	/* Don't read file immediately - lazy load on first vfs_read() */
+	/* Just get the file size for vfs_lseek support */
+	if (active_backend && active_backend->get_file_size) {
+		uint32_t sz = 0;
+		int gret =
+			active_backend->get_file_size(active_sb, vf->path, &sz);
+		if (gret == 0 && sz > 0) {
+			vf->buf_size = sz;
+		}
 	}
 
 	/* allocate per-task fd and store global index */
@@ -464,33 +494,61 @@ int vfs_read_file_all(const char *path, void **out_buf, uint32_t *out_size) {
 	if (!path || !out_buf || !out_size)
 		return -1;
 	uint32_t sz = 0;
-	if (active_backend->get_file_size(active_sb, path, &sz) != 0)
-		return -2;
-	if (sz == 0) {
-		*out_buf = NULL;
-		*out_size = 0;
-		return 0;
-	}
-	void *buf = (void *)kmalloc((size_t)sz + 1);
-	if (!buf)
-		return -3;
+	void *buf = NULL;
 	size_t out_len = 0;
-	if (active_backend->read_file(active_sb, path, buf, sz, &out_len) !=
-	    0) {
+	/* Retry get_file_size/read_file a few times to work around transient
+	 * backend read failures (e.g. block cache / ATA hiccups). */
+	for (int attempt = 0; attempt < 3; ++attempt) {
+		int gret = active_backend->get_file_size(active_sb, path, &sz);
+		printk("vfs: vfs_read_file_all attempt %d get_file_size('%s') -> rc=%d sz=%u\n",
+		       attempt, path, gret, sz);
+		if (gret != 0)
+			continue;
+		if (sz == 0) {
+			*out_buf = NULL;
+			*out_size = 0;
+			return 0;
+		}
+		{
+			uint32_t heap_free = heap_free_bytes();
+			uint32_t heap_largest = heap_largest_free_block();
+			/* Allocate extra space aligned to page boundary for safety */
+			uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
+			printk("vfs: kmalloc request %u bytes (file size %u). heap_free=%u largest=%u\n",
+			       alloc_size, (uint32_t)sz, heap_free,
+			       heap_largest);
+		}
+		/* Allocate page-aligned buffer to avoid memory corruption issues */
+		uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
+		buf = (void *)kmalloc((size_t)alloc_size);
+		if (!buf) {
+			uint32_t heap_free = heap_free_bytes();
+			uint32_t heap_largest = heap_largest_free_block();
+			printk("vfs: kmalloc(%u) FAILED. heap_free=%u largest=%u\n",
+			       (uint32_t)sz + 64, heap_free, heap_largest);
+			return -3;
+		}
+		out_len = 0;
+		int rret = active_backend->read_file(active_sb, path, buf, sz,
+						     &out_len);
+		printk("vfs: vfs_read_file_all attempt %d read_file('%s') -> rc=%d out_len=%u\n",
+		       attempt, path, rret, (uint32_t)out_len);
+		if (rret == 0) {
+			((uint8_t *)buf)[out_len] = '\0';
+			*out_buf = buf;
+			*out_size = (uint32_t)out_len;
+			return 0;
+		}
 		kfree(buf);
-		return -4;
+		buf = NULL;
 	}
-	((uint8_t *)buf)[out_len] = '\0';
-	*out_buf = buf;
-	*out_size = (uint32_t)out_len;
-	return 0;
+	return -4;
 }
 
 int vfs_list_root(void) {
 	if (!active_backend)
 		return -1;
-	/* if backend provides list_root, call it */
-	/* we added no explicit list_root pointer earlier; check for known backends by name */
+
 	if (active_backend->read_file == fat16_read_wrapper) {
 		struct fat16_super *s = (struct fat16_super *)active_sb;
 		if (!s)
@@ -506,6 +564,7 @@ int vfs_list_root(void) {
 			return -1;
 		return ext2_list_dir(s, &inode);
 	}
+
 	return -1;
 }
 

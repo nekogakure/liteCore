@@ -6,6 +6,13 @@
 
 extern struct fat16_super *g_fat16_sb;
 
+/* fallback scratch buffer used when kmalloc fails for temporary block buffer */
+static uint8_t fat16_scratch[4096];
+/* Sector buffer for FAT16 operations (typically 512 bytes) */
+static uint8_t fat16_sector_scratch[4096];
+/* Dedicated cluster buffer for fat16_read_file/fat16_list operations */
+static uint8_t fat16_cluster_scratch[4096];
+
 static int fat16_read_bytes(struct fat16_super *sb, uint32_t offset, void *dst,
 			    uint32_t len);
 static int fat16_write_bytes(struct fat16_super *sb, uint32_t offset,
@@ -26,7 +33,13 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 	uint32_t entries_per_sector = sb->bytes_per_sector / 32;
 	uint32_t sectors = ((sb->max_root_entries + entries_per_sector - 1) /
 			    entries_per_sector);
-	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
+	/* Use static scratch buffer for sector reads */
+	if (sb->bytes_per_sector > sizeof(fat16_sector_scratch)) {
+		printk("fat16: bytes_per_sector %u exceeds sector scratch size\n",
+		       sb->bytes_per_sector);
+		return -2;
+	}
+	uint8_t *sec = fat16_sector_scratch;
 	uint8_t shortname[11];
 	make_shortname(name, (char *)shortname);
 	/* Debug: log the requested shortname for lookup */
@@ -41,7 +54,10 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 	uint32_t first_free_off = 0xFFFFFFFF;
 	for (uint32_t s = 0; s < sectors; ++s) {
 		if (fat16_read_sector(sb, root_sector + s, sec) != 0) {
-			kfree(sec);
+			/* Diagnostic: report which sector failed to read */
+			printk("fat16: find_root_entry failed to read sector %u (root_sector=%u, s=%u)\n",
+			       root_sector + s, root_sector, s);
+
 			return -2;
 		}
 		for (uint32_t e = 0; e < entries_per_sector; ++e) {
@@ -52,7 +68,7 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 					*free_off = (root_sector +
 						     s) * sb->bytes_per_sector +
 						    e * 32;
-				kfree(sec);
+
 				return -1; /* end */
 			}
 			if (ent[0] == 0xE5) {
@@ -87,7 +103,7 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 							0xFFFFFFFF :
 							first_free_off;
 				}
-				kfree(sec);
+
 				return 0;
 			}
 		}
@@ -95,7 +111,7 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 	if (free_off)
 		*free_off = (first_free_off == 0xFFFFFFFF) ? 0xFFFFFFFF :
 							     first_free_off;
-	kfree(sec);
+
 	return -1;
 }
 
@@ -106,19 +122,20 @@ static int fat16_find_entry_in_dir_bytes(struct fat16_super *sb,
 					 uint32_t *free_off) {
 	uint8_t shortname[11];
 	make_shortname(name, (char *)shortname);
-	
+
 	uint32_t entries_per_sector = sb->bytes_per_sector / 32;
 	uint32_t first_free_off = 0xFFFFFFFF;
-	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
-	if (!sec)
-		return -2;
+	uint8_t *sec = fat16_sector_scratch;
 	uint16_t cur = start_cluster;
 	while (cur >= 2 && cur < 0xFFF8) {
 		uint32_t sector = sb->first_data_sector +
 				  (cur - 2) * sb->sectors_per_cluster;
 		for (uint8_t sc = 0; sc < sb->sectors_per_cluster; ++sc) {
 			if (fat16_read_sector(sb, sector + sc, sec) != 0) {
-				kfree(sec);
+				/* Diagnostic: report failing sector / cluster */
+				printk("fat16: read sector failed in dir scan sector=%u cluster=%u (sc=%u)\n",
+				       sector + sc, cur, sc);
+
 				return -2;
 			}
 			for (uint32_t e = 0; e < entries_per_sector; ++e) {
@@ -133,7 +150,7 @@ static int fat16_find_entry_in_dir_bytes(struct fat16_super *sb,
 							 0xFFFFFFFF) ?
 								abs_off :
 								first_free_off;
-					kfree(sec);
+
 					return -1; /* end */
 				}
 				if (ent[0] == 0xE5) {
@@ -162,7 +179,7 @@ static int fat16_find_entry_in_dir_bytes(struct fat16_super *sb,
 							 0xFFFFFFFF) ?
 								0xFFFFFFFF :
 								first_free_off;
-					kfree(sec);
+
 					return 0;
 				}
 			}
@@ -175,7 +192,7 @@ static int fat16_find_entry_in_dir_bytes(struct fat16_super *sb,
 	if (free_off)
 		*free_off = (first_free_off == 0xFFFFFFFF) ? 0xFFFFFFFF :
 							     first_free_off;
-	kfree(sec);
+
 	return -1;
 }
 
@@ -223,15 +240,20 @@ static int fat16_read_bytes(struct fat16_super *sb, uint32_t offset, void *dst,
 	if (!sb->cache)
 		return -1;
 	uint32_t bs = sb->cache->block_size;
-	uint8_t *tmp = (uint8_t *)kmalloc(bs);
-	if (!tmp)
+	/* Always use static scratch buffer to avoid heap fragmentation */
+	if (bs > sizeof(fat16_scratch)) {
+		printk("fat16: block_size %u exceeds scratch buffer size %u\n",
+		       bs, (uint32_t)sizeof(fat16_scratch));
 		return -1;
+	}
+	uint8_t *tmp = fat16_scratch;
 	uint32_t start_block = offset / bs;
 	uint32_t end_block = (offset + len - 1) / bs;
 	uint32_t copied = 0;
 	for (uint32_t b = start_block; b <= end_block; ++b) {
 		if (block_cache_read(sb->cache, b, tmp) != 0) {
-			kfree(tmp);
+			printk("fat16: block_cache_read failed for block %u (offset=%u len=%u)\n",
+			       b, offset, len);
 			return -1;
 		}
 		uint32_t block_off = b * bs;
@@ -243,7 +265,6 @@ static int fat16_read_bytes(struct fat16_super *sb, uint32_t offset, void *dst,
 			((uint8_t *)dst)[copied + i] = tmp[from + i];
 		copied += take;
 	}
-	kfree(tmp);
 	return 0;
 }
 
@@ -261,15 +282,18 @@ static int fat16_write_bytes(struct fat16_super *sb, uint32_t offset,
 	if (!sb->cache)
 		return -1;
 	uint32_t bs = sb->cache->block_size;
-	uint8_t *tmp = (uint8_t *)kmalloc(bs);
-	if (!tmp)
+	/* Always use static scratch buffer to avoid heap fragmentation */
+	if (bs > sizeof(fat16_scratch)) {
+		printk("fat16: block_size %u exceeds scratch buffer size %u\n",
+		       bs, (uint32_t)sizeof(fat16_scratch));
 		return -1;
+	}
+	uint8_t *tmp = fat16_scratch;
 	uint32_t start_block = offset / bs;
 	uint32_t end_block = (offset + len - 1) / bs;
 	uint32_t written = 0;
 	for (uint32_t b = start_block; b <= end_block; ++b) {
 		if (block_cache_read(sb->cache, b, tmp) != 0) {
-			kfree(tmp);
 			return -1;
 		}
 		uint32_t block_off = b * bs;
@@ -280,12 +304,10 @@ static int fat16_write_bytes(struct fat16_super *sb, uint32_t offset,
 		for (uint32_t i = 0; i < take; ++i)
 			tmp[from + i] = ((const uint8_t *)src)[written + i];
 		if (block_cache_write(sb->cache, b, tmp) != 0) {
-			kfree(tmp);
 			return -1;
 		}
 		written += take;
 	}
-	kfree(tmp);
 	return 0;
 }
 
@@ -390,6 +412,9 @@ static int fat16_resolve_path_bytes(struct fat16_super *sb, const char *path,
 		while (*p == '/')
 			p++;
 		int is_last = (*p == '\0');
+		/* Debug: component being resolved */
+		printk("fat16: resolve component '%s' (is_last=%d) dir_cluster=%u\n",
+		       comp, is_last, dir_cluster);
 		int r;
 		uint32_t found_off = 0;
 		uint8_t local_ent[32];
@@ -490,7 +515,8 @@ int fat16_mount_with_cache(struct block_cache *cache,
 	if (!cache || !out)
 		return -1;
 	uint32_t bs = cache->block_size;
-	uint8_t *tmp = (uint8_t *)kmalloc(bs);
+	/* Allocate extra space to avoid canary overwrite by block_cache_read */
+	uint8_t *tmp = (uint8_t *)kmalloc(bs + 16);
 	if (!tmp)
 		return -2;
 	/* 読み取り: ブロック0 を読み BPB を解析 */
@@ -565,18 +591,15 @@ int fat16_list_root(struct fat16_super *sb) {
 	uint32_t sectors = ((sb->max_root_entries + entries_per_sector - 1) /
 			    entries_per_sector);
 	char name[13];
-	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
-	if (!sec)
-		return -1;
+	/* Use static scratch buffer for sector reads */
+	uint8_t *sec = fat16_sector_scratch;
 	for (uint32_t s = 0; s < sectors; ++s) {
 		if (fat16_read_sector(sb, root_sector + s, sec) != 0) {
-			kfree(sec);
 			return -1;
 		}
 		for (uint32_t e = 0; e < entries_per_sector; ++e) {
 			uint8_t *ent = sec + e * 32;
 			if (ent[0] == 0x00) {
-				kfree(sec);
 				return 0;
 			}
 			if (ent[0] == 0xE5)
@@ -621,7 +644,7 @@ int fat16_list_root(struct fat16_super *sb) {
 			printk("[FILE] %u bytes\n", file_size);
 		}
 	}
-	kfree(sec);
+
 	return 0;
 }
 
@@ -656,9 +679,8 @@ int fat16_list_dir(struct fat16_super *sb, const char *path) {
 		return fat16_list_root(sb);
 
 	uint32_t entries_per_sector = sb->bytes_per_sector / 32;
-	uint8_t *sec = (uint8_t *)kmalloc(sb->bytes_per_sector);
-	if (!sec)
-		return -1;
+	/* Use static scratch buffer for sector reads */
+	uint8_t *sec = fat16_sector_scratch;
 
 	uint16_t cur = start_cluster;
 	while (cur >= 2 && cur < 0xFFF8) {
@@ -666,13 +688,11 @@ int fat16_list_dir(struct fat16_super *sb, const char *path) {
 				  (cur - 2) * sb->sectors_per_cluster;
 		for (uint8_t sc = 0; sc < sb->sectors_per_cluster; ++sc) {
 			if (fat16_read_sector(sb, sector + sc, sec) != 0) {
-				kfree(sec);
 				return -1;
 			}
 			for (uint32_t e = 0; e < entries_per_sector; ++e) {
 				uint8_t *ent = sec + e * 32;
 				if (ent[0] == 0x00) {
-					kfree(sec);
 					return 0; /* end of dir */
 				}
 				if (ent[0] == 0xE5)
@@ -727,7 +747,7 @@ int fat16_list_dir(struct fat16_super *sb, const char *path) {
 			break;
 		cur = next;
 	}
-	kfree(sec);
+
 	return 0;
 }
 
@@ -735,12 +755,14 @@ int fat16_get_file_size(struct fat16_super *sb, const char *name,
 			uint32_t *out_size) {
 	if (!sb || !name || !out_size)
 		return -1;
+	printk("fat16: fat16_get_file_size called for '%s'\n", name);
 	uint8_t ent_buf[32];
 	uint32_t ent_off = 0;
 	uint32_t free_off = 0;
 	uint16_t parent = 0;
 	int r = fat16_resolve_path_bytes(sb, name, ent_buf, &ent_off, &free_off,
 					 &parent);
+	printk("fat16: fat16_get_file_size -> resolve r=%d\n", r);
 	if (r != 0)
 		return -2;
 	uint32_t size = le32(ent_buf + 28);
@@ -765,8 +787,6 @@ int fat16_is_dir(struct fat16_super *sb, const char *path) {
 	return (attr & 0x10) ? 1 : 0;
 }
 
-/* ルートディレクトリ内のエントリ位置を探す (見つかれば ent_out にポインタを返す) */
-
 /* ファイルを読み出す (最初のクラスタのみを想定) */
 int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 		    size_t len, size_t *out_len) {
@@ -782,6 +802,8 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 		return -2;
 	uint16_t start_cluster = le16(ent_buf + 26);
 	uint32_t file_size = le32(ent_buf + 28);
+	printk("fat16: read_file name='%s' start_cluster=%u file_size=%u len=%u\n",
+	       name, start_cluster, file_size, (uint32_t)len);
 	if (file_size == 0) {
 		if (out_len)
 			*out_len = 0;
@@ -795,9 +817,14 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 	uint32_t cluster_bytes = sb->bytes_per_sector * sb->sectors_per_cluster;
 	uint32_t bytes_read = 0;
 	uint16_t cur = start_cluster;
-	uint8_t *cluster_buf = (uint8_t *)kmalloc(cluster_bytes);
-	if (!cluster_buf)
+
+	if (cluster_bytes > sizeof(fat16_cluster_scratch)) {
+		printk("fat16: cluster_bytes %u exceeds cluster_scratch size %u\n",
+		       cluster_bytes, (uint32_t)sizeof(fat16_cluster_scratch));
 		return -1;
+	}
+
+	uint8_t *cluster_buf = fat16_cluster_scratch;
 	while (cur >= 2 && cur < 0xFFF8 && bytes_read < bytes_to_read) {
 		uint32_t sector = sb->first_data_sector +
 				  (cur - 2) * sb->sectors_per_cluster;
@@ -807,7 +834,8 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 				    sb, sector + sc,
 				    cluster_buf + sc * sb->bytes_per_sector) !=
 			    0) {
-				kfree(cluster_buf);
+				printk("fat16: read_sector failed for sector %u (cluster %u)\n",
+				       sector + sc, cur);
 				return -1;
 			}
 		}
@@ -821,7 +849,6 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 			break;
 		cur = next;
 	}
-	kfree(cluster_buf);
 	if (out_len)
 		*out_len = bytes_read;
 	return 0;
@@ -951,9 +978,13 @@ int fat16_write_file(struct fat16_super *sb, const char *name, const void *buf,
 	uint32_t remaining = (uint32_t)len;
 	uint16_t cur = start_cluster;
 	uint32_t written = 0;
-	uint8_t *cluster_buf = (uint8_t *)kmalloc(cluster_bytes);
-	if (!cluster_buf)
+	/* Always use dedicated cluster scratch buffer to avoid conflicts */
+	if (cluster_bytes > sizeof(fat16_cluster_scratch)) {
+		printk("fat16: cluster_bytes %u exceeds cluster_scratch size %u\n",
+		       cluster_bytes, (uint32_t)sizeof(fat16_cluster_scratch));
 		return -1;
+	}
+	uint8_t *cluster_buf = fat16_cluster_scratch;
 	while (cur >= 2 && cur < 0xFFF8 && remaining > 0) {
 		uint32_t sector = sb->first_data_sector +
 				  (cur - 2) * sb->sectors_per_cluster;
@@ -972,7 +1003,6 @@ int fat16_write_file(struct fat16_super *sb, const char *name, const void *buf,
 					      cluster_buf +
 						      sc * sb->bytes_per_sector,
 					      sb->bytes_per_sector) != 0) {
-				kfree(cluster_buf);
 				return -1;
 			}
 		}
@@ -983,7 +1013,6 @@ int fat16_write_file(struct fat16_super *sb, const char *name, const void *buf,
 			break;
 		cur = next;
 	}
-	kfree(cluster_buf);
 	/* ディレクトリエントリの start cluster と size を更新 */
 	uint32_t entry_offset = (r == 0) ? ent_off : free_off;
 	if (entry_offset == 0xFFFFFFFF)

@@ -2,6 +2,7 @@
 #include <mem/manager.h>
 #include <util/io.h>
 #include <mem/map.h>
+#include <mem/vmem.h>
 #include <util/console.h>
 #include <interrupt/irq.h>
 #include <sync/spinlock.h>
@@ -10,8 +11,11 @@
 // ブロックヘッダは8バイト境界
 typedef struct block_header {
 	uint32_t size;
+	uint32_t tag;
 	struct block_header *next;
 } block_header_t;
+
+#define KMALLOC_CANARY 0xDEADBEEF
 
 // ヒープの先頭とフリーリストのヘッド
 static block_header_t *free_list = NULL;
@@ -19,7 +23,12 @@ static uintptr_t heap_start_addr = 0;
 static uintptr_t heap_end_addr = 0;
 static spinlock_t heap_lock = { 0 };
 
+static uint32_t alloc_seq = 1;
+
 #define ALIGN 8
+
+static int heap_expand(uint32_t additional_size);
+static void *kmalloc_internal(uint32_t size, int retry_count);
 
 // sizeをALIGNに丸める（ヘッダを除くユーザ領域のサイズ）
 static inline uint32_t align_up(uint32_t size) {
@@ -60,7 +69,17 @@ void mem_init(uint32_t start, uint32_t end) {
  * @return 確保したメモリ領域へのポインタ。失敗時はNULL
  */
 void *kmalloc(uint32_t size) {
+	return kmalloc_internal(size, 0);
+}
+
+static void *kmalloc_internal(uint32_t size, int retry_count) {
 	if (size == 0 || free_list == NULL) {
+		return NULL;
+	}
+	
+	/* Prevent infinite recursion */
+	if (retry_count > 3) {
+		printk("mem: kmalloc retry limit exceeded\n");
 		return NULL;
 	}
 
@@ -75,7 +94,38 @@ void *kmalloc(uint32_t size) {
 	block_header_t *prev = NULL;
 	block_header_t *cur = free_list;
 
+	/* Debug: trace free list for large allocations (commented out for now)
+	if (size >= 4096) {
+		printk("mem: kmalloc(%u) retry=%d searching free_list:\n", size, retry_count);
+		block_header_t *dbg = free_list;
+		int count = 0;
+		while (dbg && count < 10) {
+			printk("  block[%d]: addr=0x%08x size=%u next=0x%08x\n",
+			       count, (uint32_t)dbg, dbg->size, (uint32_t)dbg->next);
+			dbg = dbg->next;
+			count++;
+		}
+		if (dbg) {
+			printk("  ... (more blocks)\n");
+		}
+	}
+	*/
+
 	while (cur) {
+		/* Skip and remove zero-sized blocks from free list */
+		if (cur->size == 0) {
+			printk("mem: WARNING: zero-sized block found at 0x%p, removing from free list\n",
+			       cur);
+			/* Remove from list */
+			if (prev) {
+				prev->next = cur->next;
+			} else {
+				free_list = cur->next;
+			}
+			cur = cur->next;
+			continue;
+		}
+		
 		if (cur->size >= total_size) {
 			if (cur->size >=
 			    total_size + sizeof(block_header_t) + ALIGN) {
@@ -107,6 +157,46 @@ void *kmalloc(uint32_t size) {
 			// ユーザ領域はヘッダの直後
 			void *user_ptr = (void *)((uintptr_t)cur +
 						  sizeof(block_header_t));
+
+			/* Compute remaining free totals and largest contiguous block
+			 * while still holding the heap_lock to avoid races. We avoid
+			 * calling heap_free_bytes()/heap_largest_free_block() here
+			 * because they would try to take the same lock.
+			 */
+			uint32_t total_free = 0;
+			uint32_t largest = 0;
+			block_header_t *it = free_list;
+			while (it) {
+				if (it->size > sizeof(block_header_t)) {
+					uint32_t user_bytes =
+						it->size -
+						sizeof(block_header_t);
+					total_free += user_bytes;
+					if (user_bytes > largest)
+						largest = user_bytes;
+				}
+				it = it->next;
+			}
+			/* Debug logging for larger allocations to trace fragmentation */
+			if (size >= 256) {
+				((block_header_t *)cur)->tag = alloc_seq++;
+				printk("mem: kmalloc(%u) id=%u -> %p total_free(after)=%u largest=%u\n",
+				       size, ((block_header_t *)cur)->tag,
+				       user_ptr, total_free, largest);
+			}
+
+			if (wanted >= sizeof(uint32_t)) {
+				uint32_t *canary =
+					(uint32_t *)((uintptr_t)user_ptr +
+						     wanted - sizeof(uint32_t));
+				*canary = KMALLOC_CANARY;
+				if (size >= 256) {
+					printk("mem: set canary at %p (user_ptr=%p wanted=%u) value=0x%08x\n",
+					       canary, user_ptr, wanted,
+					       *canary);
+				}
+			}
+
 			spin_unlock_irqrestore(&heap_lock, flags);
 			return user_ptr;
 		}
@@ -115,8 +205,22 @@ void *kmalloc(uint32_t size) {
 		cur = cur->next;
 	}
 
-	// 見つからなかった
+	// 見つからなかった - ヒープを拡張してリトライ
 	spin_unlock_irqrestore(&heap_lock, flags);
+	
+	uint32_t expand_size = total_size;
+	if (expand_size < 0x100000) /* 1MB minimum */
+		expand_size = 0x100000;
+
+	printk("mem: kmalloc(%u) failed, attempting to expand heap by %u bytes\n",
+	       size, expand_size);
+
+	if (heap_expand(expand_size) == 0) {
+		/* Retry allocation after expansion */
+		return kmalloc_internal(size, retry_count + 1);
+	}
+
+	printk("mem: heap expansion failed, allocation failed\n");
 	return NULL;
 }
 
@@ -138,16 +242,54 @@ void kfree(void *ptr) {
 	block_header_t *hdr =
 		(block_header_t *)((uintptr_t)ptr - sizeof(block_header_t));
 
-	// 範囲チェック
+	// 基本的なサニティチェック: 最小限のヒープ開始アドレスのみチェック
+	// 動的拡張により heap_end_addr は信頼できないため、上限チェックは省略
 	uintptr_t hdr_addr = (uintptr_t)hdr;
-	if (hdr_addr < heap_start_addr ||
-	    hdr_addr + hdr->size > heap_end_addr) {
-		// 範囲外のポインタは無視
+	if (hdr_addr < heap_start_addr) {
+		// 明らかに範囲外のポインタは無視
 		spin_unlock_irqrestore(&heap_lock, flags);
 		return;
 	}
 
 	// フリーリストに挿入（アドレス順に保つ）
+	if (hdr->size > sizeof(block_header_t) &&
+	    hdr->size - sizeof(block_header_t) >= sizeof(uint32_t)) {
+		uint32_t user_bytes = hdr->size - sizeof(block_header_t);
+		uint32_t *canary =
+			(uint32_t *)((uintptr_t)hdr + sizeof(block_header_t) +
+				     user_bytes - sizeof(uint32_t));
+		if (*canary != KMALLOC_CANARY) {
+			uint32_t got = *canary;
+			uint32_t tag = hdr->tag;
+			printk("mem: kfree CANARY MISMATCH for ptr=%p hdr=%p hdr->size=%u id=%u expected=0x%08x got=0x%08x\n",
+			       ptr, hdr, hdr->size, tag,
+			       (unsigned)KMALLOC_CANARY, (unsigned)got);
+
+			uint32_t user_bytes =
+				hdr->size - sizeof(block_header_t);
+			uint8_t *user_ptr =
+				(uint8_t *)hdr + sizeof(block_header_t);
+			uint8_t *ctx_start =
+				user_ptr +
+				(user_bytes > 16 ? user_bytes - 16 : 0);
+			uint32_t ctx_len = (user_bytes > 16) ? 24 :
+							       (user_bytes + 8);
+			if (ctx_len > user_bytes + 8)
+				ctx_len = user_bytes + 8;
+			if (ctx_len > 64)
+				ctx_len = 64;
+			printk("mem: dumping %u bytes around canary (hex): ",
+			       ctx_len);
+			for (uint32_t i = 0; i < ctx_len; ++i) {
+				uint8_t v = ctx_start[i];
+				printk("%02x", v);
+				if ((i & 0xF) == 0xF)
+					printk(" ");
+			}
+			printk("\n");
+		}
+	}
+
 	if (free_list == NULL || hdr < free_list) {
 		hdr->next = free_list;
 		free_list = hdr;
@@ -175,6 +317,108 @@ void kfree(void *ptr) {
 	}
 
 	spin_unlock_irqrestore(&heap_lock, flags);
+}
+
+/**
+ * @fn heap_expand
+ * @brief ヒープを拡張します
+ *
+ * @param additional_size 追加するバイト数
+ * @return 成功時は0、失敗時は-1
+ */
+static int heap_expand(uint32_t additional_size) {
+	if (additional_size == 0)
+		return 0;
+
+	/* Align to page boundary */
+	additional_size = (additional_size + 0x0FFF) & ~0x0FFF;
+
+	/* CRITICAL: Do NOT call alloc_frame() here as it triggers kmalloc() recursion!
+	 * Instead, directly use the memory at heap_end_addr (identity-mapped).
+	 * Physical frame reservation can be done separately if needed.
+	 */
+	
+	uintptr_t new_block_addr = heap_end_addr;
+	
+	printk("mem: heap_expand creating block at 0x%08x size=%u (direct allocation, no frame alloc)\n",
+	       (uint32_t)new_block_addr, additional_size);
+	
+	uint32_t flags = 0;
+	spin_lock_irqsave(&heap_lock, &flags);
+
+	/* Create a new free block at the heap end */
+	block_header_t *new_block = (block_header_t *)new_block_addr;
+	new_block->size = additional_size;
+	new_block->next = NULL;
+	new_block->tag = 0;
+
+	/* Add to free list in address-sorted order */
+	if (free_list == NULL) {
+		free_list = new_block;
+		printk("mem: heap_expand set as first free block\n");
+	} else {
+		block_header_t *prev = NULL;
+		block_header_t *cur = free_list;
+		
+		/* Find insertion point to maintain address order */
+		while (cur && (uintptr_t)cur < (uintptr_t)new_block) {
+			prev = cur;
+			cur = cur->next;
+		}
+		
+		if (prev == NULL) {
+			/* Insert at head */
+			new_block->next = free_list;
+			free_list = new_block;
+			printk("mem: heap_expand inserted at head\n");
+		} else {
+			/* Insert after prev */
+			new_block->next = prev->next;
+			prev->next = new_block;
+			printk("mem: heap_expand inserted after 0x%p\n", prev);
+			
+			/* Try to merge with previous block if adjacent */
+			uintptr_t prev_end = (uintptr_t)prev + prev->size;
+			if (prev_end == (uintptr_t)new_block) {
+				printk("mem: heap_expand merging with previous block\n");
+				prev->size += new_block->size;
+				prev->next = new_block->next;
+				new_block = prev; /* For potential merge with next */
+			}
+		}
+		
+		/* Try to merge with next block if adjacent */
+		if (new_block->next) {
+			uintptr_t new_end = (uintptr_t)new_block + new_block->size;
+			if (new_end == (uintptr_t)new_block->next) {
+				printk("mem: heap_expand merging with next block\n");
+				block_header_t *next = new_block->next;
+				new_block->size += next->size;
+				new_block->next = next->next;
+			}
+		}
+	}
+
+	heap_end_addr += additional_size;
+
+	/* Debug: verify free list after expansion (commented out for now)
+	printk("mem: free_list after expansion (first 3):\n");
+	block_header_t *dbg = free_list;
+	int count = 0;
+	while (dbg && count < 3) {
+		printk("  [%d] addr=0x%p size=%u next=0x%p\n",
+		       count, dbg, dbg->size, dbg->next);
+		dbg = dbg->next;
+		count++;
+	}
+	*/
+
+	spin_unlock_irqrestore(&heap_lock, flags);
+
+	printk("mem: heap expanded by %u bytes, new heap_end=0x%08x\n",
+	       additional_size, (uint32_t)heap_end_addr);
+
+	return 0;
 }
 
 /**
@@ -234,7 +478,12 @@ int mem_has_space(mem_type_t type, uint32_t size) {
  * @brief メモリマップなどを初期化します
  */
 void memory_init() {
-	memmap_init(0x100000, 0x500000); // 1MB - 5MB
+	/* Expand managed physical memory range to cover more guest RAM.
+	 * Previous value was 1MB - 5MB (4MB). Increase to 1MB - 64MB
+	 * so the kernel can allocate more frames and provide a larger heap.
+	 */
+	/* initialize memmap for physical range 1MB - 64MB */
+	memmap_init(0x100000ULL, 0x4000000ULL); // 1MB - 64MB
 
 	extern uint32_t __end;
 	const memmap_t *mm = memmap_get();
@@ -250,9 +499,50 @@ void memory_init() {
 	uintptr_t heap_start = (base_end > bitmap_end) ? base_end : bitmap_end;
 	// 4KBページ境界に切り上げてアライン
 	heap_start = (heap_start + 0x0FFF) & ~0x0FFF;
-	uintptr_t heap_end = heap_start + 0x100000; // 1MBのヒープ領域
+
+	/* Start with 2MB heap, will expand dynamically as needed */
+	uintptr_t heap_end = heap_start + 0x200000; // 2MBの初期ヒープ領域
 	mem_init((uint32_t)heap_start, (uint32_t)heap_end);
-	memmap_reserve((uint32_t)heap_start, (uint32_t)heap_end);
+
+	/* Reserve the physical frames backing the heap. The computed heap_start
+	 * is a virtual/kernel address; memmap_reserve expects physical addresses.
+	 * Convert via vmem_virt_to_phys()/vmem_virt_to_phys64 and fall back to the
+	 * original values if conversion fails (best-effort).
+	 */
+	uint64_t phys_start = 0;
+	uint64_t phys_end = 0;
+	/* try 32-bit conversion first (common case) */
+	uint32_t p32 = vmem_virt_to_phys((uint32_t)heap_start);
+	if (p32 != 0) {
+		phys_start = (uint64_t)p32;
+		uint32_t p32_end = vmem_virt_to_phys((uint32_t)(heap_end - 1));
+		if (p32_end != 0) {
+			phys_end = (uint64_t)p32_end + 1;
+		}
+	}
+	if (phys_start == 0 || phys_end == 0) {
+		/* try 64-bit walker if 32-bit helper failed */
+		uint64_t p64_start = vmem_virt_to_phys64((uint64_t)heap_start);
+		uint64_t p64_end =
+			vmem_virt_to_phys64((uint64_t)(heap_end - 1));
+		if (p64_start != 0 && p64_end != 0 && p64_end >= p64_start) {
+			phys_start = p64_start;
+			phys_end = p64_end + 1;
+		}
+	}
+	if (phys_start == 0 || phys_end == 0) {
+		/* fallback: use virtual as-is (legacy behavior) but log clearly */
+		phys_start = (uint64_t)heap_start;
+		phys_end = (uint64_t)heap_end;
+		printk("mem: WARNING memmap_reserve using virtual addresses as-phys start=0x%08x end=0x%08x\n",
+		       (unsigned)heap_start, (unsigned)heap_end);
+	} else {
+		printk("mem: reserving heap physical range phys_start=0x%08llx phys_end=0x%08llx (heap virt 0x%08x-0x%08x)\n",
+		       (unsigned long long)phys_start,
+		       (unsigned long long)phys_end, (unsigned)heap_start,
+		       (unsigned)heap_end);
+	}
+	memmap_reserve(phys_start, phys_end);
 }
 
 /**

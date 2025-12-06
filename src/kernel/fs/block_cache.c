@@ -122,7 +122,7 @@ struct block_cache *block_cache_init(uint8_t drive, uint32_t block_size,
 		e->valid = 0;
 
 		/* ブロックデータ用のバッファを確保 */
-		e->data = (uint8_t *)kmalloc(block_size);
+		e->data = (uint8_t *)kmalloc(block_size + 4);
 		if (!e->data) {
 			/* 確保失敗時はクリーンアップ */
 			for (uint32_t j = 0; j < i; j++) {
@@ -173,6 +173,8 @@ int block_cache_read(struct block_cache *cache, uint32_t block_num,
 	/* LRUエントリを見つける */
 	struct block_cache_entry *lru = find_lru_entry(cache);
 	if (!lru) {
+		printk("BlockCache: no LRU entry available (num_entries=%u)\n",
+		       cache->num_entries);
 		return -1;
 	}
 
@@ -186,7 +188,13 @@ int block_cache_read(struct block_cache *cache, uint32_t block_num,
 	}
 
 	/* ディスクから読み込む */
+	printk("BlockCache: reading block %u (block_size=%u drive=%u)\n",
+	       block_num, cache->block_size, cache->drive);
 	if (read_block_from_disk(cache, block_num, lru->data) != 0) {
+		/* Diagnostic: report block read failure */
+		printk("BlockCache: failed to read block %u (block_size=%u entries=%u drive=%u)\n",
+		       block_num, cache->block_size, cache->num_entries,
+		       cache->drive);
 		return -1;
 	}
 
