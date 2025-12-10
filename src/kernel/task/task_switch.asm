@@ -166,3 +166,55 @@ task_restore:
 
     ; 新しいタスクの RIP へジャンプ
     ret
+
+; void task_enter_usermode(uint64_t entry, uint64_t user_stack, uint64_t page_directory)
+; ユーザーモードタスクへの初回起動用（iretqを使用）
+global task_enter_usermode
+task_enter_usermode:
+    ; rdi = entry (RIP)
+    ; rsi = user_stack (RSP)
+    ; rdx = page_directory (CR3)
+    
+    cli  ; 割り込みを無効化
+    
+    ; 引数をレジスタに保存（後で使用）
+    mov r15, rdi  ; entry
+    mov r14, rsi  ; user_stack
+    mov r13, rdx  ; page_directory
+    
+    ; iretq用にスタックフレームを構成
+    ; スタック: SS, RSP, RFLAGS, CS, RIP の順
+    ; 注意: CR3切り替え前にスタックフレームを構成する
+    
+    push 0x23      ; SS (ユーザーデータセグメント) セレクタ: GDT[4] | RPL=3
+    push r14       ; RSP (ユーザースタック)
+    push 0x202     ; RFLAGS (IF=1, bit1は常に1)
+    push 0x1B      ; CS (ユーザーコードセグメント) セレクタ: GDT[3] | RPL=3
+    push r15       ; RIP (エントリポイント)
+    
+    ; CR3を切り替え（ページテーブルを変更）
+    ; 注意: カーネルスタックは新しいページテーブルにもマップされている必要がある
+    mov cr3, r13
+    
+    ; レジスタをクリア（セキュリティ）
+    ; 注意: データセグメントはまだカーネルモードのまま（iretqがSSを復元する）
+    xor rax, rax
+    xor rbx, rbx
+    xor rcx, rcx
+    xor rdx, rdx
+    xor rsi, rsi
+    xor rdi, rdi
+    xor rbp, rbp
+    xor r8, r8
+    xor r9, r9
+    xor r10, r10
+    xor r11, r11
+    xor r12, r12
+    xor r13, r13
+    xor r14, r14
+    xor r15, r15
+    
+    ; ユーザーモードへ移行
+    ; iretqはスタックから RIP, CS, RFLAGS, RSP, SS をポップして復元する
+    ; CS と SS の変更により、CPUは自動的にユーザーモード（Ring 3）に遷移する
+    iretq

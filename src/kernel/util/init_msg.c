@@ -13,6 +13,7 @@
 #include <mem/map.h>
 #include <mem/manager.h>
 #include <mem/segment.h>
+#include <mem/paging.h>
 #include <driver/ata.h>
 #include <fs/fat/fat16.h>
 #include <fs/vfs.h>
@@ -35,6 +36,15 @@ void kernel_init() {
 	printk("> MEMORY INIT\n");
 #endif
 	memory_init();
+#ifdef INIT_MSG
+	printk("ok\n");
+#endif
+
+#ifdef INIT_MSG
+	new_line();
+	printk("> PAGING64 INIT\n");
+#endif
+	paging64_init_kernel_pml4();
 #ifdef INIT_MSG
 	printk("ok\n");
 #endif
@@ -148,6 +158,16 @@ void kernel_init() {
 #ifdef INIT_MSG
 	printk("ok\n");
 #endif
+
+#ifdef INIT_MSG
+	new_line();
+	printk("> TSS INIT\n");
+#endif
+	tss_init();
+#ifdef INIT_MSG
+	printk("ok\n");
+#endif
+
 }
 
 void init_font() {

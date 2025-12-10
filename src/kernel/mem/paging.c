@@ -297,9 +297,13 @@ int map_range(uint32_t phys_start, uint32_t virt_start, size_t size,
 void page_fault_handler_ex(uint32_t vec, uint32_t error_code, uint32_t eip) {
 	uint64_t fault_addr;
 	asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
+	printk("\n!!! PAGE FAULT !!!\n");
 	printk("PAGE FAULT: vec=%u err=0x%x eip=0x%x cr2=0x%lx\n",
 	       (unsigned)vec, (unsigned)error_code, (unsigned)eip,
 	       (unsigned long)fault_addr);
+	printk("Error code bits: P=%d W=%d U=%d R=%d I=%d\n", error_code & 1,
+	       (error_code >> 1) & 1, (error_code >> 2) & 1,
+	       (error_code >> 3) & 1, (error_code >> 4) & 1);
 	while (1) {
 	}
 }

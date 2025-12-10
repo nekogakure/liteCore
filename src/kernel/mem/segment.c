@@ -3,24 +3,8 @@
 #include <stddef.h>
 #include <mem/segment.h>
 
-/* GDTエントリ構造体 */
-struct gdt_entry {
-	uint16_t limit_low;
-	uint16_t base_low;
-	uint8_t base_middle;
-	uint8_t access;
-	uint8_t granularity;
-	uint8_t base_high;
-} __attribute__((packed));
-
-/* 64-bit GDT pointer */
-struct gdt_ptr {
-	uint16_t limit;
-	uint64_t base; // 64-bit base address
-} __attribute__((packed));
-
-/* ここではNULL, kernel code, kernel data, user code, user dataの5つ */
-struct gdt_entry gdt_entries[5];
+/* ここではNULL, kernel code, kernel data, user code, user data, TSS(2エントリ)の7つ */
+struct gdt_entry gdt_entries[7];
 struct gdt_ptr gp;
 
 static void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access,

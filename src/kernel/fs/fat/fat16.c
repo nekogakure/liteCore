@@ -42,15 +42,7 @@ static int fat16_find_root_entry_bytes(struct fat16_super *sb, const char *name,
 	uint8_t *sec = fat16_sector_scratch;
 	uint8_t shortname[11];
 	make_shortname(name, (char *)shortname);
-	/* Debug: log the requested shortname for lookup */
-	{
-		char dbgname[12];
-		for (int i = 0; i < 11; ++i)
-			dbgname[i] = shortname[i] ? shortname[i] : ' ';
-		dbgname[11] = '\0';
-		printk("fat16: find_root_entry looking for '%s' (orig='%s')\n",
-		       dbgname, name);
-	}
+
 	uint32_t first_free_off = 0xFFFFFFFF;
 	for (uint32_t s = 0; s < sectors; ++s) {
 		if (fat16_read_sector(sb, root_sector + s, sec) != 0) {
@@ -411,10 +403,8 @@ static int fat16_resolve_path_bytes(struct fat16_super *sb, const char *path,
 		comp[ci] = '\0';
 		while (*p == '/')
 			p++;
+		
 		int is_last = (*p == '\0');
-		/* Debug: component being resolved */
-		printk("fat16: resolve component '%s' (is_last=%d) dir_cluster=%u\n",
-		       comp, is_last, dir_cluster);
 		int r;
 		uint32_t found_off = 0;
 		uint8_t local_ent[32];
@@ -755,14 +745,12 @@ int fat16_get_file_size(struct fat16_super *sb, const char *name,
 			uint32_t *out_size) {
 	if (!sb || !name || !out_size)
 		return -1;
-	printk("fat16: fat16_get_file_size called for '%s'\n", name);
 	uint8_t ent_buf[32];
 	uint32_t ent_off = 0;
 	uint32_t free_off = 0;
 	uint16_t parent = 0;
 	int r = fat16_resolve_path_bytes(sb, name, ent_buf, &ent_off, &free_off,
 					 &parent);
-	printk("fat16: fat16_get_file_size -> resolve r=%d\n", r);
 	if (r != 0)
 		return -2;
 	uint32_t size = le32(ent_buf + 28);
@@ -802,8 +790,6 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 		return -2;
 	uint16_t start_cluster = le16(ent_buf + 26);
 	uint32_t file_size = le32(ent_buf + 28);
-	printk("fat16: read_file name='%s' start_cluster=%u file_size=%u len=%u\n",
-	       name, start_cluster, file_size, (uint32_t)len);
 	if (file_size == 0) {
 		if (out_len)
 			*out_len = 0;

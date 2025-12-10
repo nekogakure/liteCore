@@ -53,30 +53,22 @@ static void str_copy(char *dst, const char *src, size_t max_len) {
  * @return ページディレクトリの物理アドレス、失敗時は0
  */
 static uint64_t create_task_page_directory(void) {
-	// 新しいページディレクトリを確保
-	void *pd_virt = alloc_page_table();
-	if (!pd_virt) {
-		printk("create_task_page_directory: alloc_page_table failed\n");
-		return 0;
+	// 新しいユーザープロセス用のPML4を作成
+	// カーネル空間のマッピングは自動的にコピーされる
+	uint64_t new_pml4 = paging64_create_user_pml4();
+
+	if (new_pml4 == 0) {
+		printk("create_task_page_directory: Failed to create user PML4\n");
+		// フォールバック: カーネルPML4を使用
+		uint64_t kernel_cr3;
+		asm volatile("mov %%cr3, %0" : "=r"(kernel_cr3));
+		return kernel_cr3;
 	}
 
-	uint32_t *pd = (uint32_t *)pd_virt;
+	printk("create_task_page_directory: Created new PML4=0x%016lx\n",
+	       new_pml4);
 
-	// 現在のページディレクトリを取得
-	uint64_t current_cr3_val;
-	asm volatile("mov %%cr3, %0" : "=r"(current_cr3_val));
-	uint32_t current_pd_virt = vmem_phys_to_virt((uint32_t)current_cr3_val);
-	uint32_t *current_pd = (uint32_t *)(uintptr_t)current_pd_virt;
-
-	// 全エントリをコピー（カーネル空間を共有するため）
-	// エントリ0も含む
-	for (int i = 0; i < 1024; i++) {
-		pd[i] = current_pd[i];
-	}
-
-	// 物理アドレスを返す
-	uint32_t pd_phys = vmem_virt_to_phys((uint32_t)(uintptr_t)pd_virt);
-	return pd_phys;
+	return new_pml4;
 }
 
 /**
@@ -236,12 +228,9 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 		}
 		task->page_directory = pd_phys;
 
-		/* ユーザースタックを確保して新しいページディレクトリにマップする
-		 * 以前はフレームを確保してカーネル仮想アドレスをそのまま user_stack に
-		 * 保持していたが、CR3 を切り替えるとそのカーネル仮想アドレスは有効
-		 * でないためページフォルトの原因になっていた。
-		 * ここでは確保した物理フレームをユーザ空間の固定仮想アドレス
-		 * (USER_STACK_VA) にマップして、そのアドレスを RSP に設定する。
+		/* ユーザースタックを確保
+		 * 暫定実装: 64ビットページング対応のため、カーネル空間のアドレスを使用
+		 * TODO: 適切な64ビットページマッピングを実装
 		 */
 		void *ustack = alloc_frame();
 		if (!ustack) {
@@ -250,35 +239,31 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 		}
 		uint32_t ustack_phys = (uint32_t)(uintptr_t)ustack;
 
-		/* 単一ページの簡易実装: ユーザースタックはここでは1ページ分のみ割り当て */
-		const uint32_t USER_STACK_VA = 0xBFFFE000u;
-		int map_res = map_page_pd(
-			(uint32_t)pd_phys, ustack_phys, USER_STACK_VA,
-			PAGING_PRESENT | PAGING_RW | PAGING_USER);
-		if (map_res != 0) {
-			printk("task_create: Failed to map user stack into PD (err=%d)\n",
-			       map_res);
-			return NULL;
-		}
-
-		/* カーネルからアクセスしてゼロクリアしておく */
+		/* カーネル仮想アドレスに変換してゼロクリア */
 		uint32_t frame_virt = vmem_phys_to_virt(ustack_phys);
 		if (frame_virt != 0) {
 			memset((void *)(uintptr_t)frame_virt, 0, 0x1000);
 		}
 
-		/* ユーザースタックのトップ（RSP に設定する値） */
-		task->user_stack = (uint64_t)(USER_STACK_VA + 0x1000);
+		/* user_stackには物理アドレスを保存（ELFローダーが使用） */
+		task->user_stack = (uint64_t)ustack_phys;
+
+		printk("task_create: user_stack set to 0x%lx (phys=0x%x virt=0x%x)\n",
+		       task->user_stack, ustack_phys, frame_virt);
 
 		/* init per-task brk */
+		printk("task_create: About to set user_brk\n");
 		task->user_brk = 0;
 		task->user_brk_size = 0;
 
 		// レジスタを初期化
+		printk("task_create: About to initialize registers\n");
 		task->regs.rsp = task->user_stack;
 		task->regs.rip = (uint64_t)entry;
 		task->regs.rflags = 0x202; // IF=1
+		printk("task_create: About to set cr3=0x%lx\n", pd_phys);
 		task->regs.cr3 = pd_phys;
+		printk("task_create: Registers initialized\n");
 	}
 
 	// 汎用レジスタをゼロクリア

@@ -120,16 +120,16 @@ $(K_OUT_DIR)/%.o: $(SRC_KERNEL)/%.asm
 
 $(OUT_DIR)/usr/%.o: $(SRC_USER)/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+	@$(CC) $(CFLAGS) -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 $(APP_OUT_DIR)/%.o: $(SRC_APPS)/%.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+	@$(CC) $(CFLAGS) -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
 $(APP_OUT_DIR)/syscall.o: $(SRC_USER)/syscall.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+	@$(CC) $(CFLAGS) -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 $(APP_OUT_DIR)/crt.o: $(CRT_SRC)
 	@mkdir -p $(dir $@)
@@ -141,7 +141,7 @@ $(APP_OUT_DIR)/crt.o: $(CRT_SRC)
 
 $(APP_OUT_DIR)/stdio.o: $(SRC_USER)/stdio_stub.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
+	@$(CC) $(CFLAGS) -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin -I$(BIN_LIB_DIR)/targ-include -c $< -o $@
 
 
 user: lib $(ALL_USER_ELFS) $(APP_ELFS)
@@ -160,6 +160,11 @@ $(OUT_DIR)/usr/hello.elf: $(OUT_DIR)/usr/hello.o $(OUT_DIR)/usr/syscall.o
 	@mkdir -p $(dir $@)
 	@echo "Linking user ELF (hello, no -lc): $@"
 	@$(CC) -nostdlib -static $^ -o $@
+
+$(APP_OUT_DIR)/test.elf: $(APP_OUT_DIR)/test.o
+	@mkdir -p $(dir $@)
+	@echo "Linking minimal test ELF: $@"
+	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
 
 $(OUT_DIR)/usr/malloc_printf_test.elf: $(OUT_DIR)/usr/malloc_printf_test.o $(OUT_DIR)/usr/syscall.o
 	@mkdir -p $(dir $@)

@@ -215,10 +215,6 @@ int ata_read_sectors(uint8_t drive, uint32_t lba, uint8_t sectors,
 	/* ベースアドレスとドライブ選択を取得 */
 	ata_get_base(drive, &base, &drive_sel);
 
-	/* Diagnostic: announce ATA read operation start */
-	printk("ATA: ata_read_sectors start (drive=%u lba=%u sectors=%u)\n",
-	       drive, lba, sectors);
-
 	/* 割り込みを無効化 */
 	outb(base + 0x206, 0x02);
 
@@ -241,8 +237,6 @@ int ata_read_sectors(uint8_t drive, uint32_t lba, uint8_t sectors,
 
 	/* READコマンドを送信 */
 	outb(base + 7, ATA_CMD_READ_PIO);
-	printk("ATA: READ_PIO sent (base=0x%x lba=%u sectors=%u drive=%u)\n",
-	       base, lba, sectors, drive);
 
 	/* 各セクタを読み取る */
 	for (int s = 0; s < sectors; s++) {

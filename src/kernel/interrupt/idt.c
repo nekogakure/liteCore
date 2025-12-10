@@ -122,30 +122,78 @@ extern void page_fault_handler(uint32_t vec);
 extern void page_fault_handler_ex(uint32_t vec, uint32_t error_code,
 				  uint32_t eip);
 
-void irq_exception_c(uint32_t vec) {
-	if (vec == 14) {
-		page_fault_handler(vec);
-	} else {
-		/* other exceptions: just spin */
-		printk("exception vec=%u\n", (unsigned)vec);
-		while (1) {
-		}
-	}
-}
-
+/**
+ * @fn irq_exception_ex
+ * @brief 例外発生時の拡張ハンドラ
+ */
 /**
  * @fn irq_exception_ex
  * @brief 例外発生時の拡張ハンドラ
  */
 void irq_exception_ex(uint32_t vec, uint32_t error_code) {
+	const char *exception_names[] = { "Divide by Zero",
+					  "Debug",
+					  "NMI",
+					  "Breakpoint",
+					  "Overflow",
+					  "Bound Range Exceeded",
+					  "Invalid Opcode",
+					  "Device Not Available",
+					  "Double Fault",
+					  "Coprocessor Segment Overrun",
+					  "Invalid TSS",
+					  "Segment Not Present",
+					  "Stack-Segment Fault",
+					  "General Protection Fault",
+					  "Page Fault",
+					  "Reserved",
+					  "x87 FPU Error",
+					  "Alignment Check",
+					  "Machine Check",
+					  "SIMD FP Exception",
+					  "Virtualization Exception",
+					  "Control Protection Exception" };
+	const char *name = (vec < 22) ? exception_names[vec] :
+					"Unknown Exception";
+
+	printk("\n!!! CPU EXCEPTION !!!\n");
+	printk("Exception: %s (vector %u)\n", name, (unsigned)vec);
+	printk("Error code: 0x%x\n", (unsigned)error_code);
+
 	if (vec == 14) {
-		// C言語からEIPを正確に取得するのは難しいため、ここでは0を渡す
-		page_fault_handler_ex(vec, error_code, 0);
-	} else {
-		printk("exception ex vec=%u err=0x%x\n", (unsigned)vec,
-		       (unsigned)error_code);
-		while (1) {
+		// Page Fault - print CR2
+		uint64_t fault_addr;
+		asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
+		printk("Page Fault at address: 0x%lx\n", fault_addr);
+		printk("Error code bits: P=%d W=%d U=%d R=%d I=%d\n",
+		       error_code & 1, (error_code >> 1) & 1,
+		       (error_code >> 2) & 1, (error_code >> 3) & 1,
+		       (error_code >> 4) & 1);
+	} else if (vec == 13) {
+		// GPF
+		printk("GPF Error code breakdown:\n");
+		printk("  External: %d\n", (error_code >> 0) & 1);
+		printk("  IDT: %d\n", (error_code >> 1) & 1);
+		printk("  TI: %d\n", (error_code >> 2) & 1);
+		printk("  Selector Index: 0x%x\n", (error_code >> 3) & 0x1FFF);
+	}
+
+	uint64_t rsp, cr3;
+	asm volatile("mov %%rsp, %0" : "=r"(rsp));
+	asm volatile("mov %%cr3, %0" : "=r"(cr3));
+	printk("RSP=0x%lx CR3=0x%lx\n", rsp, cr3);
+
+	// スタック上のiretqフレームを表示（可能であれば）
+	if (vec == 6) { // Invalid Opcode
+		printk("Attempting to read iretq frame from stack:\n");
+		uint64_t *stack_ptr = (uint64_t *)rsp;
+		for (int i = 0; i < 8; i++) {
+			printk("  [RSP+%d] = 0x%016lx\n", i * 8, stack_ptr[i]);
 		}
+	}
+
+	while (1) {
+		asm volatile("hlt");
 	}
 }
 
@@ -155,6 +203,40 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
  */
 void idt_init(void) {
 	pic_remap();
+
+	/* CPU例外ハンドラ (0-31) */
+	extern void isr0(void);
+	extern void isr1(void);
+	extern void isr2(void);
+	extern void isr3(void);
+	extern void isr4(void);
+	extern void isr5(void);
+	extern void isr6(void);
+	extern void isr7(void);
+	extern void isr8(void);
+	extern void isr9(void);
+	extern void isr10(void);
+	extern void isr11(void);
+	extern void isr12(void);
+	extern void isr13(void);
+	extern void isr14(void);
+	extern void isr15(void);
+	extern void isr16(void);
+	extern void isr17(void);
+	extern void isr18(void);
+	extern void isr19(void);
+	extern void isr20(void);
+	extern void isr21(void);
+	extern void isr22(void);
+	extern void isr23(void);
+	extern void isr24(void);
+	extern void isr25(void);
+	extern void isr26(void);
+	extern void isr27(void);
+	extern void isr28(void);
+	extern void isr29(void);
+	extern void isr30(void);
+	extern void isr31(void);
 
 	/* 明示的に各isrシンボルをextern宣言し、それをIDTに登録する（脳筋だぜぇ〜ｗｗｗ */
 	extern void isr32(void);
@@ -177,7 +259,41 @@ void idt_init(void) {
 
 	extern void isr128(void);
 
+	/* CPU例外を登録 */
+	idt_set_gate(0, (uint64_t)isr0);
+	idt_set_gate(1, (uint64_t)isr1);
+	idt_set_gate(2, (uint64_t)isr2);
+	idt_set_gate(3, (uint64_t)isr3);
+	idt_set_gate(4, (uint64_t)isr4);
+	idt_set_gate(5, (uint64_t)isr5);
+	idt_set_gate(6, (uint64_t)isr6);
+	idt_set_gate(7, (uint64_t)isr7);
+	idt_set_gate(8, (uint64_t)isr8);
+	idt_set_gate(9, (uint64_t)isr9);
+	idt_set_gate(10, (uint64_t)isr10);
+	idt_set_gate(11, (uint64_t)isr11);
+	idt_set_gate(12, (uint64_t)isr12);
+	idt_set_gate(13, (uint64_t)isr13);
 	idt_set_gate(14, (uint64_t)isr14); /* page fault */
+	idt_set_gate(15, (uint64_t)isr15);
+	idt_set_gate(16, (uint64_t)isr16);
+	idt_set_gate(17, (uint64_t)isr17);
+	idt_set_gate(18, (uint64_t)isr18);
+	idt_set_gate(19, (uint64_t)isr19);
+	idt_set_gate(20, (uint64_t)isr20);
+	idt_set_gate(21, (uint64_t)isr21);
+	idt_set_gate(22, (uint64_t)isr22);
+	idt_set_gate(23, (uint64_t)isr23);
+	idt_set_gate(24, (uint64_t)isr24);
+	idt_set_gate(25, (uint64_t)isr25);
+	idt_set_gate(26, (uint64_t)isr26);
+	idt_set_gate(27, (uint64_t)isr27);
+	idt_set_gate(28, (uint64_t)isr28);
+	idt_set_gate(29, (uint64_t)isr29);
+	idt_set_gate(30, (uint64_t)isr30);
+	idt_set_gate(31, (uint64_t)isr31);
+
+	/* IRQハンドラ */
 	idt_set_gate(32, (uint64_t)isr32);
 	idt_set_gate(33, (uint64_t)isr33);
 	idt_set_gate(34, (uint64_t)isr34);

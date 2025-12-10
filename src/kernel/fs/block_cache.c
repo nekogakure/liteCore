@@ -188,8 +188,6 @@ int block_cache_read(struct block_cache *cache, uint32_t block_num,
 	}
 
 	/* ディスクから読み込む */
-	printk("BlockCache: reading block %u (block_size=%u drive=%u)\n",
-	       block_num, cache->block_size, cache->drive);
 	if (read_block_from_disk(cache, block_num, lru->data) != 0) {
 		/* Diagnostic: report block read failure */
 		printk("BlockCache: failed to read block %u (block_size=%u entries=%u drive=%u)\n",

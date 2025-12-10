@@ -13,6 +13,7 @@
 #include <mem/map.h>
 #include <mem/manager.h>
 #include <mem/segment.h>
+#include <mem/tss.h>
 #include <driver/ata.h>
 #include <fs/fat/fat16.h>
 #include <driver/timer/timer.h>

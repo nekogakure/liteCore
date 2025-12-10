@@ -4,7 +4,6 @@ global isr_stub_table
 isr_stub_table:
 
 extern irq_handler_c
-extern irq_exception_c
 extern irq_exception_ex
 
 ; Macro for saving all registers (64-bit)
@@ -45,23 +44,79 @@ extern irq_exception_ex
         pop rax
 %endmacro
 
-; Exception with error code: isr14 (Page Fault)
-global isr14
-isr14:
+; Exception handlers (0-31)
+; Exceptions without error code
+%macro ISR_NOERR 1
+global isr%1
+isr%1:
+        cli                     ; Disable interrupts
+        push qword 0            ; Dummy error code
+        push qword %1           ; Push vector number
+        jmp isr_common_stub
+%endmacro
+
+; Exceptions with error code
+%macro ISR_ERR 1
+global isr%1
+isr%1:
+        cli                     ; Disable interrupts
+        push qword %1           ; Push vector number (error code already on stack)
+        jmp isr_common_stub_err
+%endmacro
+
+; Common stub for exceptions without error code
+isr_common_stub:
         PUSH_ALL
-        ; // IRQスタブから直接プリエンプト用Cエントリを呼ぶ
-        mov rdi, rsp            ; // 第1引数: スタックポインタ (保存されたレジスタ配列)
-        mov rsi, 48             ; // 第2引数: ベクタ番号
-        extern irq_preempt_entry
-        call irq_preempt_entry
-        POP_ALL
-        iretq
-        ; We don't have EIP in the same way, skip for now
-        xor edx, edx           ; arg3: eip (placeholder)
+        mov rdi, [rsp + 15*8]   ; Vector number
+        xor esi, esi            ; Error code = 0
         call irq_exception_ex
         POP_ALL
-        add rsp, 8             ; Pop error code
+        add rsp, 16             ; Pop vector number and dummy error code
         iretq
+
+; Common stub for exceptions with error code
+isr_common_stub_err:
+        PUSH_ALL
+        mov rdi, [rsp + 15*8]   ; Vector number
+        mov rsi, [rsp + 16*8]   ; Error code
+        call irq_exception_ex
+        POP_ALL
+        add rsp, 16             ; Pop vector number and error code
+        iretq
+
+; CPU Exceptions (0-31)
+ISR_NOERR 0   ; Divide by Zero
+ISR_NOERR 1   ; Debug
+ISR_NOERR 2   ; Non-Maskable Interrupt
+ISR_NOERR 3   ; Breakpoint
+ISR_NOERR 4   ; Overflow
+ISR_NOERR 5   ; Bound Range Exceeded
+ISR_NOERR 6   ; Invalid Opcode
+ISR_NOERR 7   ; Device Not Available
+ISR_ERR   8   ; Double Fault
+ISR_NOERR 9   ; Coprocessor Segment Overrun (legacy)
+ISR_ERR   10  ; Invalid TSS
+ISR_ERR   11  ; Segment Not Present
+ISR_ERR   12  ; Stack-Segment Fault
+ISR_ERR   13  ; General Protection Fault
+ISR_ERR   14  ; Page Fault
+ISR_NOERR 15  ; Reserved
+ISR_NOERR 16  ; x87 Floating-Point Exception
+ISR_ERR   17  ; Alignment Check
+ISR_NOERR 18  ; Machine Check
+ISR_NOERR 19  ; SIMD Floating-Point Exception
+ISR_NOERR 20  ; Virtualization Exception
+ISR_ERR   21  ; Control Protection Exception
+ISR_NOERR 22  ; Reserved
+ISR_NOERR 23  ; Reserved
+ISR_NOERR 24  ; Reserved
+ISR_NOERR 25  ; Reserved
+ISR_NOERR 26  ; Reserved
+ISR_NOERR 27  ; Reserved
+ISR_NOERR 28  ; Hypervisor Injection Exception
+ISR_ERR   29  ; VMM Communication Exception
+ISR_ERR   30  ; Security Exception
+ISR_NOERR 31  ; Reserved
 
 ; IRQ handlers 32-47
 global isr32

@@ -130,8 +130,9 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 		}
 
 		if (cur->size >= total_size) {
+			/* Only split if remainder is useful (header + at least ALIGN bytes for user) */
 			if (cur->size >=
-			    total_size + sizeof(block_header_t) + ALIGN) {
+			    total_size + sizeof(block_header_t) + ALIGN * 2) {
 				// 分割可能 -> 残りを新しいフリーブロックにする
 				uintptr_t cur_addr = (uintptr_t)cur;
 				block_header_t *next_block =
@@ -182,9 +183,6 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			/* Debug logging for larger allocations to trace fragmentation */
 			if (size >= 256) {
 				((block_header_t *)cur)->tag = alloc_seq++;
-				printk("mem: kmalloc(%u) id=%u -> %p total_free(after)=%u largest=%u\n",
-				       size, ((block_header_t *)cur)->tag,
-				       user_ptr, total_free, largest);
 			}
 
 			/* Place canary at end of allocated space (before alignment padding) */
@@ -212,9 +210,6 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 	uint32_t expand_size = total_size;
 	if (expand_size < 0x100000) /* 1MB minimum */
 		expand_size = 0x100000;
-
-	printk("mem: kmalloc(%u) failed, attempting to expand heap by %u bytes\n",
-	       size, expand_size);
 
 	if (heap_expand(expand_size) == 0) {
 		/* Retry allocation after expansion */

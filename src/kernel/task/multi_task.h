@@ -101,4 +101,13 @@ void task_schedule_from_irq(registers_t *irq_regs);
 
 extern void task_restore(registers_t *new_regs);
 
+/**
+ * @brief ユーザーモードタスクへ初回起動（アセンブリ実装）
+ * @param entry エントリポイント（RIP）
+ * @param user_stack ユーザースタックポインタ（RSP）
+ * @param page_directory ユーザーページディレクトリ（CR3）
+ */
+extern void task_enter_usermode(uint64_t entry, uint64_t user_stack,
+				uint64_t page_directory);
+
 #endif /* _TASK_TASK_H */

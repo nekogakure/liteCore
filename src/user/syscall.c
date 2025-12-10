@@ -9,7 +9,6 @@
 #endif
 
 enum {
-	/* Use x86_64 syscall numbers */
 	SYS_read = 0,
 	SYS_write = 1,
 	SYS_open = 2,

@@ -277,7 +277,6 @@ int vfs_write(int fd, const void *buf, size_t len) {
 int vfs_read(int fd, void *buf, size_t len) {
 	if (buf == NULL)
 		return -1;
-	printk("vfs: vfs_read called fd=%d len=%u\n", fd, (uint32_t)len);
 	if (fd == 0) {
 		char *out = (char *)buf;
 		size_t i;
@@ -504,8 +503,7 @@ int vfs_read_file_all(const char *path, void **out_buf, uint32_t *out_size) {
 	 * backend read failures (e.g. block cache / ATA hiccups). */
 	for (int attempt = 0; attempt < 3; ++attempt) {
 		int gret = active_backend->get_file_size(active_sb, path, &sz);
-		printk("vfs: vfs_read_file_all attempt %d get_file_size('%s') -> rc=%d sz=%u\n",
-		       attempt, path, gret, sz);
+
 		if (gret != 0)
 			continue;
 		if (sz == 0) {
@@ -518,9 +516,6 @@ int vfs_read_file_all(const char *path, void **out_buf, uint32_t *out_size) {
 			uint32_t heap_largest = heap_largest_free_block();
 			/* Allocate extra space aligned to page boundary for safety */
 			uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
-			printk("vfs: kmalloc request %u bytes (file size %u). heap_free=%u largest=%u\n",
-			       alloc_size, (uint32_t)sz, heap_free,
-			       heap_largest);
 		}
 		/* Allocate page-aligned buffer to avoid memory corruption issues */
 		uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
@@ -535,8 +530,6 @@ int vfs_read_file_all(const char *path, void **out_buf, uint32_t *out_size) {
 		out_len = 0;
 		int rret = active_backend->read_file(active_sb, path, buf, sz,
 						     &out_len);
-		printk("vfs: vfs_read_file_all attempt %d read_file('%s') -> rc=%d out_len=%u\n",
-		       attempt, path, rret, (uint32_t)out_len);
 		if (rret == 0) {
 			((uint8_t *)buf)[out_len] = '\0';
 			*out_buf = buf;
