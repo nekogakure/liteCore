@@ -167,7 +167,6 @@ void kernel_init() {
 #ifdef INIT_MSG
 	printk("ok\n");
 #endif
-
 }
 
 void init_font() {

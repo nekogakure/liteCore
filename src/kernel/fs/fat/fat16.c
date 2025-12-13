@@ -403,7 +403,7 @@ static int fat16_resolve_path_bytes(struct fat16_super *sb, const char *path,
 		comp[ci] = '\0';
 		while (*p == '/')
 			p++;
-		
+
 		int is_last = (*p == '\0');
 		int r;
 		uint32_t found_off = 0;
