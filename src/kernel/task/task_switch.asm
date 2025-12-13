@@ -175,38 +175,6 @@ task_enter_usermode:
     ; rsi = user_stack (RSP)
     ; rdx = page_directory (CR3)
     cli  ; 割り込みを無効化
-    ; --- debug: record the incoming parameters into ELF snapshot variables ---
-    ; extern vars are defined in elf.c
-    extern elf_call_snapshot_func_addr
-    extern elf_call_snapshot_rdi
-    extern elf_call_snapshot_rsi
-    extern elf_call_snapshot_rdx
-    extern elf_call_snapshot_rsp
-    mov rax, rdi
-    mov [rel elf_call_snapshot_func_addr], rax
-    mov [rel elf_call_snapshot_rdi], rdi
-    mov [rel elf_call_snapshot_rsi], rsi
-    mov [rel elf_call_snapshot_rdx], rdx
-    mov rax, rsp
-    mov [rel elf_call_snapshot_rsp], rax
-    ; ----------------------------------------------------------------------
-    
-    ; Debug: print the iretq frame values before executing iretq
-    ; (We'll add a C helper to print these)
-    extern debug_print_iretq_frame
-    ; Save arguments in callee-saved registers before calling C
-    mov r12, rdi   ; entry (RIP)
-    mov r13, rsi   ; user_stack (RSP)
-    mov r14, rdx   ; page_directory (CR3)
-    
-    ; Call C function to print debug info
-    ; void debug_print_iretq_frame(uint64_t rip, uint64_t rsp, uint64_t cr3)
-    call debug_print_iretq_frame
-    
-    ; Restore arguments
-    mov rdi, r12
-    mov rsi, r13
-    mov rdx, r14
     
     ; iretq用にスタックフレームを構成
     ; スタック: SS, RSP, RFLAGS, CS, RIP の順（逆順でプッシュ）

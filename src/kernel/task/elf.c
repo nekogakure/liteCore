@@ -11,12 +11,7 @@
 #include <task/elf.h>
 #include <fs/vfs.h>
 
-/*
- * Debug helper: resolve a virtual address using a supplied PML4 physical
- * address and print the first bytes at that virtual address. This allows
- * us to verify that the ELF entry point is mapped to the expected physical
- * frame and contains valid instructions prior to iretq.
- */
+#if 0 // デバッグ用 - 必要に応じて有効化
 static uint64_t resolve_phys_in_pml4(uint64_t pml4_phys, uint64_t virt) {
 	/* indices */
 	uint64_t pml4_idx = (virt >> 39) & 0x1FFULL;
@@ -77,16 +72,19 @@ static uint64_t resolve_phys_in_pml4(uint64_t pml4_phys, uint64_t virt) {
 static void debug_dump_entry_bytes(uint64_t pd_phys, uint64_t entry) {
 	uint64_t phys = resolve_phys_in_pml4(pd_phys, entry);
 	if (phys == UINT64_MAX) {
-		printk("ELF-DUMP: could not resolve entry 0x%lx in PML4=0x%lx\n", entry, pd_phys);
+		printk("ELF-DUMP: could not resolve entry 0x%lx in PML4=0x%lx\n",
+		       entry, pd_phys);
 		return;
 	}
 	uint64_t kvirt = vmem_phys_to_virt64(phys & 0xFFFFFFFFFFFFF000ULL);
 	if (kvirt == UINT64_MAX) {
-		printk("ELF-DUMP: vmem_phys_to_virt64 failed for phys=0x%lx\n", phys);
+		printk("ELF-DUMP: vmem_phys_to_virt64 failed for phys=0x%lx\n",
+		       phys);
 		return;
 	}
 	uint8_t *p = (uint8_t *)(uintptr_t)(kvirt + (phys & 0xFFFULL));
-	printk("ELF-DUMP: entry phys=0x%lx kvirt=0x%lx offset=0x%lx bytes:", phys, kvirt, (unsigned long)(phys & 0xFFFULL));
+	printk("ELF-DUMP: entry phys=0x%lx kvirt=0x%lx offset=0x%lx bytes:",
+	       phys, kvirt, (unsigned long)(phys & 0xFFFULL));
 	for (int i = 0; i < 16; i++) {
 		printk(" %02x", (unsigned)p[i]);
 	}
@@ -101,30 +99,35 @@ void debug_print_iretq_frame(uint64_t rip, uint64_t rsp, uint64_t cr3) {
 	uint64_t rflags;
 	asm volatile("pushfq; pop %0" : "=r"(rflags));
 	rflags |= 0x200; // IF=1
-	
+
 	printk("IRETQ-FRAME: RIP=0x%lx CS=0x1B RFLAGS=0x%lx RSP=0x%lx SS=0x23 CR3=0x%lx\n",
 	       rip, rflags, rsp, cr3);
-	
+
 	// Dump GDT to verify segment descriptors
 	extern void gdt_dump(void);
 	gdt_dump();
-	
+
 	// Verify that the user stack page is actually mapped
 	uint64_t stack_phys = resolve_phys_in_pml4(cr3, rsp);
 	if (stack_phys == UINT64_MAX) {
-		printk("ERROR: User stack RSP=0x%lx is NOT mapped in CR3=0x%lx!\n", rsp, cr3);
+		printk("ERROR: User stack RSP=0x%lx is NOT mapped in CR3=0x%lx!\n",
+		       rsp, cr3);
 	} else {
-		printk("User stack RSP=0x%lx resolves to phys=0x%lx (OK)\n", rsp, stack_phys);
+		printk("User stack RSP=0x%lx resolves to phys=0x%lx (OK)\n",
+		       rsp, stack_phys);
 	}
-	
+
 	// Verify RIP is mapped
 	uint64_t rip_phys = resolve_phys_in_pml4(cr3, rip);
 	if (rip_phys == UINT64_MAX) {
-		printk("ERROR: Entry RIP=0x%lx is NOT mapped in CR3=0x%lx!\n", rip, cr3);
+		printk("ERROR: Entry RIP=0x%lx is NOT mapped in CR3=0x%lx!\n",
+		       rip, cr3);
 	} else {
-		printk("Entry RIP=0x%lx resolves to phys=0x%lx (OK)\n", rip, rip_phys);
+		printk("Entry RIP=0x%lx resolves to phys=0x%lx (OK)\n", rip,
+		       rip_phys);
 	}
 }
+#endif
 
 // デバッグ用スナップショット変数: task_enter_usermode 呼び出し直前のレジスタ/スタック
 volatile uint64_t elf_call_snapshot_func_addr = 0;
@@ -145,10 +148,6 @@ volatile uint64_t elf_call_snapshot_rsp = 0;
 // ssize_t定義
 typedef long ssize_t;
 
-// セグメントのロード情報を追跡
-static void *loaded_base = NULL; // 最初のPT_LOADセグメントの実際のアドレス
-static uint64_t loaded_vaddr = 0; // 最初のPT_LOADセグメントの期待vaddr
-
 // ELF64 ヘッダー定義
 #define ELF_MAGIC 0x464C457F // "\x7FELF"
 #define ELF_CLASS_64 2
@@ -161,6 +160,7 @@ static uint64_t loaded_vaddr = 0; // 最初のPT_LOADセグメントの期待vad
 #define PF_W 0x2
 #define PF_R 0x4
 
+/// @brief ELF64ヘッダ構造体
 typedef struct {
 	uint32_t magic;
 	uint8_t class;
@@ -290,12 +290,7 @@ static int load_segment(int fd, const elf64_program_header_t *ph,
 			printk("ELF: Failed to map page at 0x%lx\n", vaddr);
 			return -1;
 		}
-		printk("ELF: Mapped vaddr=0x%lx -> phys=0x%lx\n", vaddr,
-		       (uint64_t)(uintptr_t)page_phys);
 	}
-	printk("ELF: Loaded segment vaddr=0x%lx-0x%lx flags=%c%c%c\n",
-	       ph->vaddr, ph->vaddr + ph->memsz, (ph->flags & PF_R) ? 'R' : '-',
-	       (ph->flags & PF_W) ? 'W' : '-', (ph->flags & PF_X) ? 'X' : '-');
 	return 0;
 }
 
@@ -315,8 +310,6 @@ static void elf_dummy_entry(void) {
  * @brief ELFファイルを実行
  */
 int elf_run(const char *path) {
-	printk("ELF: Loading %s\n", path);
-
 	// ファイルを開く
 	int fd = vfs_open(path, O_RDONLY, 0);
 	if (fd < 0) {
@@ -339,9 +332,6 @@ int elf_run(const char *path) {
 		return -1;
 	}
 
-	printk("ELF: Entry point: 0x%x\n", (uint32_t)header.entry);
-	printk("ELF: Program headers: %d\n", header.phnum);
-
 	// まずタスクを作成（ページディレクトリとスタックを確保）
 	task_t *new_task = task_create(elf_dummy_entry, path, 0);
 	if (!new_task) {
@@ -351,15 +341,12 @@ int elf_run(const char *path) {
 	}
 
 	// タスク情報を保存（ポインタは破壊される可能性があるため値をコピー）
-	uint32_t tid = new_task->tid;
 	uint64_t pd_phys = new_task->page_directory;
 	uint64_t user_stack_phys = new_task->user_stack;
 
 	// ユーザースタックをユーザー空間の仮想アドレスにマップ
 	// 注意: タスクの新しいPML4にマップする必要があるため、map_page_64()を直接使用
 	uint64_t user_stack_virt = 0x7FFFE000ULL; // 2GB - 8KB
-	printk("ELF: Mapping user stack phys=0x%lx to virt=0x%lx in PML4=0x%lx\n",
-	       user_stack_phys, user_stack_virt, pd_phys);
 	if (map_page_64(pd_phys, user_stack_phys, user_stack_virt,
 			PAGING_RW | PAGING_USER | PAGING_PRESENT) != 0) {
 		printk("ELF: Failed to map user stack at 0x%lx\n",
@@ -367,12 +354,9 @@ int elf_run(const char *path) {
 		vfs_close(fd);
 		return -1;
 	}
-	printk("ELF: User stack mapped successfully\n");
 	// スタックトップに設定（下向きに成長するため、マップしたページの最上位アドレス）
-	uint64_t user_stack_top = user_stack_virt + 0x1000 - 8; // 8バイト下げてアライメント確保
-
-	printk("ELF: Task created - TID=%u, PD=0x%lx, user_stack=0x%lx\n", tid,
-	       pd_phys, user_stack_top);
+	uint64_t user_stack_top =
+		user_stack_virt + 0x1000 - 8; // 8バイト下げてアライメント確保
 
 	// プログラムヘッダーを読み込んでセグメントをロード
 	// 既存のページディレクトリにマップする
@@ -398,24 +382,11 @@ int elf_run(const char *path) {
 
 	vfs_close(fd);
 
-	// デバッグ: CR3の確認
-	uint64_t current_cr3;
-	asm volatile("mov %%cr3, %0" : "=r"(current_cr3));
-	printk("ELF: Current CR3=0x%lx, will switch to CR3=0x%lx\n",
-	       current_cr3, pd_phys);
-	// デバッグ: エントリポイントの確認
-	printk("ELF: Entry point=0x%lx is in segment 0x401000-0x40b06e (R-X)\n",
-	       header.entry);
-
 	// TSSにカーネルスタックを設定
 	// ユーザーモードから例外/割り込みが発生した時のスタックポインタ
 	uint64_t kernel_stack;
 	asm volatile("mov %%rsp, %0" : "=r"(kernel_stack));
 	tss_set_kernel_stack(kernel_stack);
-
-	// デバッグ: task_enter_usermode 呼び出し直前のレジスタ/スタックをスナップショットしてから呼び出す
-	printk("ELF: Launching usermode at entry=0x%lx stack=0x%lx CR3=0x%lx\n",
-	       header.entry, user_stack_top, pd_phys);
 
 	/*
 		 * inline asm で以下を行う:
@@ -426,9 +397,6 @@ int elf_run(const char *path) {
 		 */
 	void (*fn)(uint64_t, uint64_t, uint64_t) = task_enter_usermode;
 	uint64_t fnaddr = (uint64_t)fn;
-
-	/* Dump first bytes at the entry point (debug) */
-	debug_dump_entry_bytes(pd_phys, header.entry);
 
 	asm volatile("mov %[fnaddr], %%rax\n\t"
 		     "mov %[a1], %%rdi\n\t"

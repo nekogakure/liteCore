@@ -110,13 +110,6 @@ void memmap_init(uint64_t start, uint64_t end) {
 	memmap.max_frames = count; /* logical max */
 	memmap.bitmap = NULL;
 
-	/* Diagnostic: print memmap summary so we can see physical ranges managed */
-	printk("memmap: init start_addr=0x%08llx end_addr=0x%08llx start_frame=%llu frames=%llu\n",
-	       (unsigned long long)memmap.start_addr,
-	       (unsigned long long)memmap.end_addr,
-	       (unsigned long long)memmap.start_frame,
-	       (unsigned long long)memmap.frames);
-
 	/* clear any existing chunk list */
 	{
 		uint32_t flags = 0;
@@ -285,9 +278,6 @@ uint64_t frame_count(void) {
 void memmap_reserve(uint64_t start, uint64_t end) {
 	if (memmap.frames == 0)
 		return;
-
-	printk("memmap_reserve: request start=0x%08llx end=0x%08llx\n",
-	       (unsigned long long)start, (unsigned long long)end);
 
 	uint64_t start_frame = start / FRAME_SIZE;
 	uint64_t end_frame = (end + FRAME_SIZE - 1) / FRAME_SIZE;

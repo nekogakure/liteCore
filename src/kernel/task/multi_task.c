@@ -65,9 +65,6 @@ static uint64_t create_task_page_directory(void) {
 		return kernel_cr3;
 	}
 
-	printk("create_task_page_directory: Created new PML4=0x%016lx\n",
-	       new_pml4);
-
 	return new_pml4;
 }
 
@@ -248,22 +245,15 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 		/* user_stackには物理アドレスを保存（ELFローダーが使用） */
 		task->user_stack = (uint64_t)ustack_phys;
 
-		printk("task_create: user_stack set to 0x%lx (phys=0x%x virt=0x%x)\n",
-		       task->user_stack, ustack_phys, frame_virt);
-
 		/* init per-task brk */
-		printk("task_create: About to set user_brk\n");
 		task->user_brk = 0;
 		task->user_brk_size = 0;
 
 		// レジスタを初期化
-		printk("task_create: About to initialize registers\n");
 		task->regs.rsp = task->user_stack;
 		task->regs.rip = (uint64_t)entry;
 		task->regs.rflags = 0x202; // IF=1
-		printk("task_create: About to set cr3=0x%lx\n", pd_phys);
 		task->regs.cr3 = pd_phys;
-		printk("task_create: Registers initialized\n");
 	}
 
 	// 汎用レジスタをゼロクリア
@@ -378,44 +368,44 @@ void task_schedule(void) {
 		 * following label so the resumed task continues after this point.
 		 */
 		asm volatile(
-		    "push %%rax\n\t"                       /* preserve rax while computing rip */
-		    "leaq 1f(%%rip), %%rax\n\t"           /* compute RIP */
-		    "mov %%rax, %0\n\t"                  /* old_task->regs.rip */
-		    "pop %%rax\n\t"                        /* restore rax */
-		    "mov %%rax, %1\n\t"                  /* rax */
-		    "mov %%rbx, %2\n\t"
-		    "mov %%rcx, %3\n\t"
-		    "mov %%rdx, %4\n\t"
-		    "mov %%rsi, %5\n\t"
-		    "mov %%rdi, %6\n\t"
-		    "mov %%rbp, %7\n\t"
-		    "mov %%rsp, %8\n\t"
-		    "mov %%r8, %9\n\t"
-		    "mov %%r9, %10\n\t"
-		    "mov %%r10, %11\n\t"
-		    "mov %%r11, %12\n\t"
-		    "mov %%r12, %13\n\t"
-		    "mov %%r13, %14\n\t"
-		    "mov %%r14, %15\n\t"
-		    "mov %%r15, %16\n\t"
-		    "pushfq\n\t"
-		    "pop %%rax\n\t"
-		    "mov %%rax, %17\n\t"                /* rflags */
-		    "mov %%cr3, %%rax\n\t"
-		    "mov %%rax, %18\n\t"
-		    "1:\n\t"
-		    : "=m"(old_task->regs.rip), "=m"(old_task->regs.rax),
-		      "=m"(old_task->regs.rbx), "=m"(old_task->regs.rcx),
-		      "=m"(old_task->regs.rdx), "=m"(old_task->regs.rsi),
-		      "=m"(old_task->regs.rdi), "=m"(old_task->regs.rbp),
-		      "=m"(old_task->regs.rsp), "=m"(old_task->regs.r8),
-		      "=m"(old_task->regs.r9), "=m"(old_task->regs.r10),
-		      "=m"(old_task->regs.r11), "=m"(old_task->regs.r12),
-		      "=m"(old_task->regs.r13), "=m"(old_task->regs.r14),
-		      "=m"(old_task->regs.r15), "=m"(old_task->regs.rflags),
-		      "=m"(old_task->regs.cr3)
-				: /* no inputs */
-				: "memory", "rax");
+			"push %%rax\n\t" /* preserve rax while computing rip */
+			"leaq 1f(%%rip), %%rax\n\t" /* compute RIP */
+			"mov %%rax, %0\n\t" /* old_task->regs.rip */
+			"pop %%rax\n\t" /* restore rax */
+			"mov %%rax, %1\n\t" /* rax */
+			"mov %%rbx, %2\n\t"
+			"mov %%rcx, %3\n\t"
+			"mov %%rdx, %4\n\t"
+			"mov %%rsi, %5\n\t"
+			"mov %%rdi, %6\n\t"
+			"mov %%rbp, %7\n\t"
+			"mov %%rsp, %8\n\t"
+			"mov %%r8, %9\n\t"
+			"mov %%r9, %10\n\t"
+			"mov %%r10, %11\n\t"
+			"mov %%r11, %12\n\t"
+			"mov %%r12, %13\n\t"
+			"mov %%r13, %14\n\t"
+			"mov %%r14, %15\n\t"
+			"mov %%r15, %16\n\t"
+			"pushfq\n\t"
+			"pop %%rax\n\t"
+			"mov %%rax, %17\n\t" /* rflags */
+			"mov %%cr3, %%rax\n\t"
+			"mov %%rax, %18\n\t"
+			"1:\n\t"
+			: "=m"(old_task->regs.rip), "=m"(old_task->regs.rax),
+			  "=m"(old_task->regs.rbx), "=m"(old_task->regs.rcx),
+			  "=m"(old_task->regs.rdx), "=m"(old_task->regs.rsi),
+			  "=m"(old_task->regs.rdi), "=m"(old_task->regs.rbp),
+			  "=m"(old_task->regs.rsp), "=m"(old_task->regs.r8),
+			  "=m"(old_task->regs.r9), "=m"(old_task->regs.r10),
+			  "=m"(old_task->regs.r11), "=m"(old_task->regs.r12),
+			  "=m"(old_task->regs.r13), "=m"(old_task->regs.r14),
+			  "=m"(old_task->regs.r15), "=m"(old_task->regs.rflags),
+			  "=m"(old_task->regs.cr3)
+			: /* no inputs */
+			: "memory", "rax");
 
 		/* Transfer control to the new task by restoring its registers. */
 		task_restore(&next_task->regs);

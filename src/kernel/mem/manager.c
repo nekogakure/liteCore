@@ -162,10 +162,6 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 			void *user_ptr = (void *)((uintptr_t)cur +
 						  sizeof(block_header_t));
 
-			/* Calculate actual user bytes allocated (might be larger than wanted) */
-			uint32_t actual_user_bytes =
-				cur->size - sizeof(block_header_t);
-
 			uint32_t total_free = 0;
 			uint32_t largest = 0;
 			block_header_t *it = free_list;
@@ -190,12 +186,7 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 							wanted_with_canary -
 							sizeof(uint32_t));
 			*canary = KMALLOC_CANARY;
-			if (size >= 256) {
-				printk("mem: set canary at %p (user_ptr=%p wanted=%u wanted_with_canary=%u actual_allocated=%u) value=0x%08x\n",
-				       canary, user_ptr, wanted,
-				       wanted_with_canary, actual_user_bytes,
-				       *canary);
-			}
+
 			spin_unlock_irqrestore(&heap_lock, flags);
 			return user_ptr;
 		}
@@ -536,11 +527,6 @@ void memory_init() {
 		phys_end = (uint64_t)heap_end;
 		printk("mem: WARNING memmap_reserve using virtual addresses as-phys start=0x%08x end=0x%08x\n",
 		       (unsigned)heap_start, (unsigned)heap_end);
-	} else {
-		printk("mem: reserving heap physical range phys_start=0x%08llx phys_end=0x%08llx (heap virt 0x%08x-0x%08x)\n",
-		       (unsigned long long)phys_start,
-		       (unsigned long long)phys_end, (unsigned)heap_start,
-		       (unsigned)heap_end);
 	}
 	memmap_reserve(phys_start, phys_end);
 }

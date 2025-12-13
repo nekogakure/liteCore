@@ -154,7 +154,7 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
 			       (unsigned long)stack_ptr[i]);
 		}
 
-		uint64_t maybe_rip = 0, maybe_cs = 0, maybe_rsp = 0;
+		uint64_t maybe_rip = 0, maybe_cs = 0;
 		for (int idx = 17; idx <= 20; idx++) {
 			uint64_t val = stack_ptr[idx];
 			if (val != 0) {
@@ -212,14 +212,7 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
 	printk("  CS:  0x%lx\n", saved_cs);
 	printk("  RSP: 0x%lx\n", saved_rsp);
 
-	/* ELF 呼び出し直前のスナップショットが存在すれば表示する（デバッグ用） */
-	printk("ELF: call-snapshot: func=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rsp=0x%lx\n",
-	       (unsigned long)elf_call_snapshot_func_addr,
-	       (unsigned long)elf_call_snapshot_rdi,
-	       (unsigned long)elf_call_snapshot_rsi,
-	       (unsigned long)elf_call_snapshot_rdx,
-	       (unsigned long)elf_call_snapshot_rsp);
-
+	// Halt the system
 	while (1) {
 		asm volatile("hlt");
 	}

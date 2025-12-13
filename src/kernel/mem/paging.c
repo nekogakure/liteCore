@@ -31,15 +31,11 @@ void *alloc_page_table(void) {
 		       (unsigned)phys);
 		return NULL;
 	}
-	printk("alloc_page_table: clearing table at virt=0x%x (phys=0x%x)\n",
-	       (unsigned)virt, (unsigned)phys);
-	// ページングが有効化されていない場合、virtはphysと同じ（アイデンティティ）
-	// しかし、physが1MBを超える場合、アクセスできない可能性がある
+
 	// 安全のため、物理アドレスで直接アクセス
 	uint32_t *tbl_phys = (uint32_t *)(uintptr_t)phys;
 	for (size_t i = 0; i < 1024; ++i)
 		tbl_phys[i] = 0;
-	printk("alloc_page_table: table cleared\n");
 	// return the virtual pointer for convenience to callers
 	return (void *)(uintptr_t)virt;
 }

@@ -20,10 +20,7 @@ static vmem_phys2virt_fn phys2virt = NULL;
 
 // 仮想アドレス→物理アドレス変換
 uint32_t vmem_virt_to_phys(uint32_t virt) {
-	printk("vmem_virt_to_phys: virt=0x%x mode=%d\n", (unsigned)virt,
-	       (int)current_mode);
 	if (current_mode == VMEM_MODE_IDENTITY) {
-		printk("vmem_virt_to_phys: identity -> 0x%x\n", (unsigned)virt);
 		return virt;
 	}
 	if (current_mode == VMEM_MODE_OFFSET) {
