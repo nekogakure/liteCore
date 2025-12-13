@@ -174,47 +174,54 @@ task_enter_usermode:
     ; rdi = entry (RIP)
     ; rsi = user_stack (RSP)
     ; rdx = page_directory (CR3)
-    
     cli  ; 割り込みを無効化
+    ; --- debug: record the incoming parameters into ELF snapshot variables ---
+    ; extern vars are defined in elf.c
+    extern elf_call_snapshot_func_addr
+    extern elf_call_snapshot_rdi
+    extern elf_call_snapshot_rsi
+    extern elf_call_snapshot_rdx
+    extern elf_call_snapshot_rsp
+    mov rax, rdi
+    mov [rel elf_call_snapshot_func_addr], rax
+    mov [rel elf_call_snapshot_rdi], rdi
+    mov [rel elf_call_snapshot_rsi], rsi
+    mov [rel elf_call_snapshot_rdx], rdx
+    mov rax, rsp
+    mov [rel elf_call_snapshot_rsp], rax
+    ; ----------------------------------------------------------------------
     
-    ; 引数をレジスタに保存（後で使用）
-    mov r15, rdi  ; entry
-    mov r14, rsi  ; user_stack
-    mov r13, rdx  ; page_directory
+    ; Debug: print the iretq frame values before executing iretq
+    ; (We'll add a C helper to print these)
+    extern debug_print_iretq_frame
+    ; Save arguments in callee-saved registers before calling C
+    mov r12, rdi   ; entry (RIP)
+    mov r13, rsi   ; user_stack (RSP)
+    mov r14, rdx   ; page_directory (CR3)
+    
+    ; Call C function to print debug info
+    ; void debug_print_iretq_frame(uint64_t rip, uint64_t rsp, uint64_t cr3)
+    call debug_print_iretq_frame
+    
+    ; Restore arguments
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
     
     ; iretq用にスタックフレームを構成
-    ; スタック: SS, RSP, RFLAGS, CS, RIP の順
-    ; 注意: CR3切り替え前にスタックフレームを構成する
+    ; スタック: SS, RSP, RFLAGS, CS, RIP の順（逆順でプッシュ）
     
-    push 0x23      ; SS (ユーザーデータセグメント) セレクタ: GDT[4] | RPL=3
-    push r14       ; RSP (ユーザースタック)
-    push 0x202     ; RFLAGS (IF=1, bit1は常に1)
-    push 0x1B      ; CS (ユーザーコードセグメント) セレクタ: GDT[3] | RPL=3
-    push r15       ; RIP (エントリポイント)
+    push 0x23      ; SS (ユーザーデータセグメント)
+    push rsi       ; RSP (ユーザースタック)
+    pushfq         ; 現在のRFLAGSを保存
+    pop rax
+    or rax, 0x200  ; IF=1を確実にセット
+    push rax       ; RFLAGS
+    push 0x1B      ; CS (ユーザーコードセグメント)
+    push rdi       ; RIP (エントリポイント)
     
-    ; CR3を切り替え（ページテーブルを変更）
-    ; 注意: カーネルスタックは新しいページテーブルにもマップされている必要がある
-    mov cr3, r13
-    
-    ; レジスタをクリア（セキュリティ）
-    ; 注意: データセグメントはまだカーネルモードのまま（iretqがSSを復元する）
-    xor rax, rax
-    xor rbx, rbx
-    xor rcx, rcx
-    xor rdx, rdx
-    xor rsi, rsi
-    xor rdi, rdi
-    xor rbp, rbp
-    xor r8, r8
-    xor r9, r9
-    xor r10, r10
-    xor r11, r11
-    xor r12, r12
-    xor r13, r13
-    xor r14, r14
-    xor r15, r15
+    ; CR3 をユーザのページディレクトリに切り替える
+    mov cr3, rdx
     
     ; ユーザーモードへ移行
-    ; iretqはスタックから RIP, CS, RFLAGS, RSP, SS をポップして復元する
-    ; CS と SS の変更により、CPUは自動的にユーザーモード（Ring 3）に遷移する
     iretq

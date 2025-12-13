@@ -373,7 +373,52 @@ void task_schedule(void) {
 
 	// コンテキストスイッチ（異なるタスクの場合のみ）
 	if (old_task != next_task) {
-		task_switch(&old_task->regs, &next_task->regs);
+		/* Save current CPU registers into old_task->regs so we can
+		 * restore this task later. We capture RIP as the address of the
+		 * following label so the resumed task continues after this point.
+		 */
+		asm volatile(
+		    "push %%rax\n\t"                       /* preserve rax while computing rip */
+		    "leaq 1f(%%rip), %%rax\n\t"           /* compute RIP */
+		    "mov %%rax, %0\n\t"                  /* old_task->regs.rip */
+		    "pop %%rax\n\t"                        /* restore rax */
+		    "mov %%rax, %1\n\t"                  /* rax */
+		    "mov %%rbx, %2\n\t"
+		    "mov %%rcx, %3\n\t"
+		    "mov %%rdx, %4\n\t"
+		    "mov %%rsi, %5\n\t"
+		    "mov %%rdi, %6\n\t"
+		    "mov %%rbp, %7\n\t"
+		    "mov %%rsp, %8\n\t"
+		    "mov %%r8, %9\n\t"
+		    "mov %%r9, %10\n\t"
+		    "mov %%r10, %11\n\t"
+		    "mov %%r11, %12\n\t"
+		    "mov %%r12, %13\n\t"
+		    "mov %%r13, %14\n\t"
+		    "mov %%r14, %15\n\t"
+		    "mov %%r15, %16\n\t"
+		    "pushfq\n\t"
+		    "pop %%rax\n\t"
+		    "mov %%rax, %17\n\t"                /* rflags */
+		    "mov %%cr3, %%rax\n\t"
+		    "mov %%rax, %18\n\t"
+		    "1:\n\t"
+		    : "=m"(old_task->regs.rip), "=m"(old_task->regs.rax),
+		      "=m"(old_task->regs.rbx), "=m"(old_task->regs.rcx),
+		      "=m"(old_task->regs.rdx), "=m"(old_task->regs.rsi),
+		      "=m"(old_task->regs.rdi), "=m"(old_task->regs.rbp),
+		      "=m"(old_task->regs.rsp), "=m"(old_task->regs.r8),
+		      "=m"(old_task->regs.r9), "=m"(old_task->regs.r10),
+		      "=m"(old_task->regs.r11), "=m"(old_task->regs.r12),
+		      "=m"(old_task->regs.r13), "=m"(old_task->regs.r14),
+		      "=m"(old_task->regs.r15), "=m"(old_task->regs.rflags),
+		      "=m"(old_task->regs.cr3)
+				: /* no inputs */
+				: "memory", "rax");
+
+		/* Transfer control to the new task by restoring its registers. */
+		task_restore(&next_task->regs);
 	}
 }
 

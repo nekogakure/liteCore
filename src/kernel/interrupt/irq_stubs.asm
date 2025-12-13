@@ -5,6 +5,7 @@ isr_stub_table:
 
 extern irq_handler_c
 extern irq_exception_ex
+extern last_isr_stack
 
 ; Macro for saving all registers (64-bit)
 %macro PUSH_ALL 0
@@ -67,6 +68,9 @@ isr%1:
 ; Common stub for exceptions without error code
 isr_common_stub:
         PUSH_ALL
+        ; save pointer to the ISR stack (rsp after PUSH_ALL) into C-visible variable
+        mov rax, rsp
+        mov [rel last_isr_stack], rax
         mov rdi, [rsp + 15*8]   ; Vector number
         xor esi, esi            ; Error code = 0
         call irq_exception_ex
@@ -77,6 +81,9 @@ isr_common_stub:
 ; Common stub for exceptions with error code
 isr_common_stub_err:
         PUSH_ALL
+        ; save pointer to the ISR stack (rsp after PUSH_ALL) into C-visible variable
+        mov rax, rsp
+        mov [rel last_isr_stack], rax
         mov rdi, [rsp + 15*8]   ; Vector number
         mov rsi, [rsp + 16*8]   ; Error code
         call irq_exception_ex

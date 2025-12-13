@@ -3,6 +3,13 @@
 #include <interrupt/idt.h>
 #include <interrupt/irq.h>
 
+/* ELF 呼び出しスナップショット（elf.c でセットされる） */
+extern volatile uint64_t elf_call_snapshot_func_addr;
+extern volatile uint64_t elf_call_snapshot_rdi;
+extern volatile uint64_t elf_call_snapshot_rsi;
+extern volatile uint64_t elf_call_snapshot_rdx;
+extern volatile uint64_t elf_call_snapshot_rsp;
+
 /* PIC ports */
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA 0x21
@@ -122,15 +129,48 @@ extern void page_fault_handler(uint32_t vec);
 extern void page_fault_handler_ex(uint32_t vec, uint32_t error_code,
 				  uint32_t eip);
 
-/**
- * @fn irq_exception_ex
- * @brief 例外発生時の拡張ハンドラ
- */
+static volatile int first_exception = 1;
+static uint64_t saved_rip = 0;
+static uint64_t saved_rsp = 0;
+static uint64_t saved_cs = 0;
+static uint32_t saved_vec = 0;
+/* ISR stub がセットする、PUSH_ALL 後の RSP を保存するデバッグ変数 */
+volatile uint64_t last_isr_stack = 0;
+
 /**
  * @fn irq_exception_ex
  * @brief 例外発生時の拡張ハンドラ
  */
 void irq_exception_ex(uint32_t vec, uint32_t error_code) {
+	if (first_exception) {
+		first_exception = 0;
+		saved_vec = vec;
+		uint64_t *stack_ptr = (uint64_t *)last_isr_stack;
+
+		printk("ISR stack snapshot (first 24 qwords at %p):\n",
+		       stack_ptr);
+		for (int i = 0; i < 24; i++) {
+			printk("  stack[%02d]=0x%016lx\n", i,
+			       (unsigned long)stack_ptr[i]);
+		}
+
+		uint64_t maybe_rip = 0, maybe_cs = 0, maybe_rsp = 0;
+		for (int idx = 17; idx <= 20; idx++) {
+			uint64_t val = stack_ptr[idx];
+			if (val != 0) {
+				maybe_rip = val;
+				maybe_cs = (idx + 1 <= 23) ?
+						   stack_ptr[idx + 1] :
+						   0;
+				break;
+			}
+		}
+
+		saved_rip = maybe_rip;
+		saved_cs = maybe_cs;
+		saved_rsp = 0; /* kernel-mode exception: SS/RSP not pushed */
+	}
+
 	const char *exception_names[] = { "Divide by Zero",
 					  "Debug",
 					  "NMI",
@@ -153,11 +193,11 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
 					  "SIMD FP Exception",
 					  "Virtualization Exception",
 					  "Control Protection Exception" };
-	const char *name = (vec < 22) ? exception_names[vec] :
-					"Unknown Exception";
+	const char *name = (saved_vec < 22) ? exception_names[saved_vec] :
+					      "Unknown Exception";
 
 	printk("\n!!! CPU EXCEPTION !!!\n");
-	printk("Exception: %s (vector %u)\n", name, (unsigned)vec);
+	printk("Exception: %s (vector %u)\n", name, (unsigned)saved_vec);
 	printk("Error code: 0x%x\n", (unsigned)error_code);
 
 	if (vec == 14) {
@@ -165,32 +205,20 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
 		uint64_t fault_addr;
 		asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
 		printk("Page Fault at address: 0x%lx\n", fault_addr);
-		printk("Error code bits: P=%d W=%d U=%d R=%d I=%d\n",
-		       error_code & 1, (error_code >> 1) & 1,
-		       (error_code >> 2) & 1, (error_code >> 3) & 1,
-		       (error_code >> 4) & 1);
-	} else if (vec == 13) {
-		// GPF
-		printk("GPF Error code breakdown:\n");
-		printk("  External: %d\n", (error_code >> 0) & 1);
-		printk("  IDT: %d\n", (error_code >> 1) & 1);
-		printk("  TI: %d\n", (error_code >> 2) & 1);
-		printk("  Selector Index: 0x%x\n", (error_code >> 3) & 0x1FFF);
 	}
 
-	uint64_t rsp, cr3;
-	asm volatile("mov %%rsp, %0" : "=r"(rsp));
-	asm volatile("mov %%cr3, %0" : "=r"(cr3));
-	printk("RSP=0x%lx CR3=0x%lx\n", rsp, cr3);
+	printk("FIRST EXCEPTION INFO:\n");
+	printk("  RIP: 0x%lx\n", saved_rip);
+	printk("  CS:  0x%lx\n", saved_cs);
+	printk("  RSP: 0x%lx\n", saved_rsp);
 
-	// スタック上のiretqフレームを表示（可能であれば）
-	if (vec == 6) { // Invalid Opcode
-		printk("Attempting to read iretq frame from stack:\n");
-		uint64_t *stack_ptr = (uint64_t *)rsp;
-		for (int i = 0; i < 8; i++) {
-			printk("  [RSP+%d] = 0x%016lx\n", i * 8, stack_ptr[i]);
-		}
-	}
+	/* ELF 呼び出し直前のスナップショットが存在すれば表示する（デバッグ用） */
+	printk("ELF: call-snapshot: func=0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rsp=0x%lx\n",
+	       (unsigned long)elf_call_snapshot_func_addr,
+	       (unsigned long)elf_call_snapshot_rdi,
+	       (unsigned long)elf_call_snapshot_rsi,
+	       (unsigned long)elf_call_snapshot_rdx,
+	       (unsigned long)elf_call_snapshot_rsp);
 
 	while (1) {
 		asm volatile("hlt");

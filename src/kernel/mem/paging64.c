@@ -27,14 +27,27 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 	if ((flags & PAGING_PRESENT) == 0)
 		flags |= PAGING_PRESENT;
 
+	/* Debug: print incoming args to help diagnose caller/ABI issues */
+	printk("map_page_64: enter pml4_phys=0x%016lx phys=0x%016lx virt=0x%016lx flags=0x%08x\n",
+	       (unsigned long)pml4_phys, (unsigned long)phys,
+	       (unsigned long)virt, (unsigned)flags);
+
 	// 64ビットページングのインデックス計算
 	uint64_t pml4_idx = (virt >> 39) & 0x1FF; // bits 47-39
 	uint64_t pdpt_idx = (virt >> 30) & 0x1FF; // bits 38-30
 	uint64_t pd_idx = (virt >> 21) & 0x1FF; // bits 29-21
 	uint64_t pt_idx = (virt >> 12) & 0x1FF; // bits 20-12
 
-	// PML4テーブルにアクセス - アイデンティティマッピングを仮定
-	uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+	/* Convert PML4 physical address to a kernel virtual pointer so we
+	 * can access and modify the page tables regardless of current CR3
+	 * mapping mode. vmem_phys_to_virt64 returns UINT64_MAX on error. */
+	uint64_t pml4_virt = vmem_phys_to_virt64(pml4_phys);
+	if (pml4_virt == UINT64_MAX) {
+		printk("map_page_64: vmem_phys_to_virt64 returned error for pml4_phys=0x%016lx\n",
+		       (unsigned long)pml4_phys);
+		return -1;
+	}
+	uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
 	uint64_t pml4_entry = pml4[pml4_idx];
 
 	// PML4エントリをチェック/作成
@@ -44,13 +57,19 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 			printk("map_page_64: Failed to allocate PDPT\n");
 			return -1;
 		}
-		// 64ビット版として確実にゼロクリア（alloc_page_tableは32ビット版なので）
+		/* Zero the new table (alloc_page_table returns a virtual pointer).
+		 * Then obtain the physical address for the entry via vmem_virt_to_phys64. */
 		uint64_t *pdpt_clear = (uint64_t *)pdpt_virt;
 		for (int i = 0; i < 512; i++) {
 			pdpt_clear[i] = 0;
 		}
-		// 仮想→物理変換（アイデンティティマッピングなら同じ値）
-		uint64_t pdpt_phys = (uint64_t)(uintptr_t)pdpt_virt;
+		uint64_t pdpt_phys =
+			vmem_virt_to_phys64((uint64_t)(uintptr_t)pdpt_virt);
+		if (pdpt_phys == UINT64_MAX) {
+			printk("map_page_64: vmem_virt_to_phys64 failed for pdpt_virt=0x%016lx\n",
+			       (unsigned long)(uintptr_t)pdpt_virt);
+			return -1;
+		}
 		uint64_t entry = (pdpt_phys & 0xFFFFFFFFFFFFF000ULL) |
 				 PAGING_PRESENT | PAGING_RW | PAGING_USER;
 		entry &= ~(1ULL << 63); // NXビットをクリア
@@ -62,7 +81,13 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 
 	// PDPTテーブルにアクセス
 	uint64_t pdpt_phys = pml4[pml4_idx] & 0xFFFFFFFFFFFFF000ULL;
-	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_phys;
+	uint64_t pdpt_virt_ptr = vmem_phys_to_virt64(pdpt_phys);
+	if (pdpt_virt_ptr == UINT64_MAX) {
+		printk("map_page_64: vmem_phys_to_virt64 returned error for pdpt_phys=0x%016lx\n",
+		       (unsigned long)pdpt_phys);
+		return -1;
+	}
+	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_virt_ptr;
 
 	// PDPTエントリをチェック/作成
 	if ((pdpt[pdpt_idx] & PAGING_PRESENT) == 0) {
@@ -71,16 +96,26 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 			printk("map_page_64: Failed to allocate PD\n");
 			return -1;
 		}
-		// 64ビット版として確実にゼロクリア
 		uint64_t *pd_clear = (uint64_t *)pd_virt;
 		for (int i = 0; i < 512; i++) {
 			pd_clear[i] = 0;
 		}
-		uint64_t pd_phys = (uint64_t)(uintptr_t)pd_virt;
+		uint64_t pd_phys =
+			vmem_virt_to_phys64((uint64_t)(uintptr_t)pd_virt);
+		if (pd_phys == UINT64_MAX) {
+			printk("map_page_64: vmem_virt_to_phys64 failed for pd_virt=0x%016lx\n",
+			       (unsigned long)(uintptr_t)pd_virt);
+			return -1;
+		}
 		uint64_t entry = (pd_phys & 0xFFFFFFFFFFFFF000ULL) |
 				 PAGING_PRESENT | PAGING_RW | PAGING_USER;
 		entry &= ~(1ULL << 63); // NXビットをクリア
 		pdpt[pdpt_idx] = entry;
+		/* Debug: print the PD we just created for this PDPT index */
+		printk("map_page_64: created PD: pd_phys=0x%016lx pd_virt=0x%016lx pdpt_idx=%lu\n",
+		       (unsigned long)pd_phys,
+		       (unsigned long)(uintptr_t)pd_virt,
+		       (unsigned long)pdpt_idx);
 	} else {
 		// 既存のエントリ - NXビットをクリア
 		pdpt[pdpt_idx] &= ~(1ULL << 63);
@@ -88,39 +123,105 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 
 	// PDテーブルにアクセス
 	uint64_t pd_phys_addr = pdpt[pdpt_idx] & 0xFFFFFFFFFFFFF000ULL;
-	uint64_t *pd = (uint64_t *)(uintptr_t)pd_phys_addr;
+	uint64_t pd_virt_ptr = vmem_phys_to_virt64(pd_phys_addr);
+	if (pd_virt_ptr == UINT64_MAX) {
+		printk("map_page_64: vmem_phys_to_virt64 returned error for pd_phys=0x%016lx\n",
+		       (unsigned long)pd_phys_addr);
+		return -1;
+	}
+	uint64_t *pd = (uint64_t *)(uintptr_t)pd_virt_ptr;
 
 	// PDエントリをチェック/作成
+	// 既存エントリが2MBラージページ（PS bit=1）の場合は分割が必要
 	if ((pd[pd_idx] & PAGING_PRESENT) == 0) {
+		// エントリが存在しない場合：新しいPTを作成
 		void *pt_virt = alloc_page_table();
 		if (!pt_virt) {
 			printk("map_page_64: Failed to allocate PT\n");
 			return -1;
 		}
-		// 64ビット版として確実にゼロクリア
 		uint64_t *pt_clear = (uint64_t *)pt_virt;
 		for (int i = 0; i < 512; i++) {
 			pt_clear[i] = 0;
 		}
-		uint64_t pt_phys = (uint64_t)(uintptr_t)pt_virt;
+		uint64_t pt_phys =
+			vmem_virt_to_phys64((uint64_t)(uintptr_t)pt_virt);
+		if (pt_phys == UINT64_MAX) {
+			printk("map_page_64: vmem_virt_to_phys64 failed for pt_virt=0x%016lx\n",
+			       (unsigned long)(uintptr_t)pt_virt);
+			return -1;
+		}
 		uint64_t entry = (pt_phys & 0xFFFFFFFFFFFFF000ULL) |
 				 PAGING_PRESENT | PAGING_RW | PAGING_USER;
 		entry &= ~(1ULL << 63); // NXビットをクリア
 		pd[pd_idx] = entry;
+	} else if (pd[pd_idx] & (1ULL << 7)) {
+		// 既存エントリが2MBラージページ（PS bit=1）の場合：分割する
+		printk("map_page_64: Breaking 2MB large page at PD[%lu] into 4KB pages\n",
+		       (unsigned long)pd_idx);
+		
+		uint64_t large_page_base = pd[pd_idx] & 0xFFFFFFFFFFE00000ULL;
+		uint64_t large_page_flags = pd[pd_idx] & 0xFFF;
+		
+		// 新しいPTを割り当て
+		void *pt_virt = alloc_page_table();
+		if (!pt_virt) {
+			printk("map_page_64: Failed to allocate PT for page split\n");
+			return -1;
+		}
+		uint64_t *pt_split = (uint64_t *)pt_virt;
+		
+		// 2MBラージページを512個の4KBページに分割
+		for (int i = 0; i < 512; i++) {
+			uint64_t page_phys = large_page_base + ((uint64_t)i * 0x1000);
+			// PS bitを除去し、他のフラグは保持
+			pt_split[i] = (page_phys & 0xFFFFFFFFFFFFF000ULL) |
+				      (large_page_flags & ~(1ULL << 7));
+		}
+		
+		uint64_t pt_phys = vmem_virt_to_phys64((uint64_t)(uintptr_t)pt_virt);
+		if (pt_phys == UINT64_MAX) {
+			printk("map_page_64: vmem_virt_to_phys64 failed for pt_virt=0x%016lx\n",
+			       (unsigned long)(uintptr_t)pt_virt);
+			return -1;
+		}
+		
+		// PDエントリを新しいPTを指すように更新（PS bitをクリア）
+		pd[pd_idx] = (pt_phys & 0xFFFFFFFFFFFFF000ULL) |
+			     PAGING_PRESENT | PAGING_RW | PAGING_USER;
+		pd[pd_idx] &= ~(1ULL << 63); // NXビットをクリア
+		
+		// TLB を無効化（2MB分）
+		for (uint64_t i = 0; i < 512; i++) {
+			uint64_t flush_addr = (virt & 0xFFFFFFFFFFE00000ULL) + (i * 0x1000);
+			invlpg((void *)(uintptr_t)flush_addr);
+		}
 	} else {
-		// 既存のエントリ - NXビットをクリア
+		// 既存のエントリ（4KB PT）- NXビットをクリア
 		pd[pd_idx] &= ~(1ULL << 63);
 	}
 
 	// PTテーブルにアクセス
 	uint64_t pt_phys_addr = pd[pd_idx] & 0xFFFFFFFFFFFFF000ULL;
-	uint64_t *pt = (uint64_t *)(uintptr_t)pt_phys_addr;
+	uint64_t pt_virt_ptr = vmem_phys_to_virt64(pt_phys_addr);
+	if (pt_virt_ptr == UINT64_MAX) {
+		printk("map_page_64: vmem_phys_to_virt64 returned error for pt_phys=0x%016lx\n",
+		       (unsigned long)pt_phys_addr);
+		return -1;
+	}
+	uint64_t *pt = (uint64_t *)(uintptr_t)pt_virt_ptr;
 
 	// 最終的なマッピングを設定
 	// NXビット（bit 63）を明示的にクリアして実行可能にする
 	uint64_t entry = (phys & 0xFFFFFFFFFFFFF000ULL) | (flags & 0xFFF);
 	entry &= ~(1ULL << 63); // NXビットをクリア（実行可能）
 	pt[pt_idx] = entry;
+	/* Debug: verify write */
+	printk("map_page_64: set PTE: pml4_phys=0x%016lx pml4_idx=0x%03lx pdpt_idx=0x%03lx pd_idx=0x%03lx pt_idx=0x%03lx phys=0x%016lx entry=0x%016lx readback=0x%016lx\n",
+	       (unsigned long)pml4_phys, (unsigned long)pml4_idx,
+	       (unsigned long)pdpt_idx, (unsigned long)pd_idx,
+	       (unsigned long)pt_idx, (unsigned long)phys, (unsigned long)entry,
+	       (unsigned long)pt[pt_idx]);
 
 	// TLBを無効化
 	invlpg((void *)(uintptr_t)virt);
@@ -142,10 +243,16 @@ int map_page_current_64(uint64_t phys, uint64_t virt, uint32_t flags) {
  * カーネル初期化時に1度だけ呼ばれる
  */
 void paging64_init_kernel_pml4(void) {
-	// 現在のCR3（UEFIのPML4）を取得
+	// 現在のCR3（UEFIのPML4）を取得（物理アドレス）
 	uint64_t uefi_cr3;
 	asm volatile("mov %%cr3, %0" : "=r"(uefi_cr3));
-	uint64_t *uefi_pml4 = (uint64_t *)(uintptr_t)uefi_cr3;
+	uint64_t uefi_pml4_virt = vmem_phys_to_virt64(uefi_cr3);
+	if (uefi_pml4_virt == UINT64_MAX) {
+		printk("paging64_init_kernel_pml4: vmem_phys_to_virt64 failed for uefi_cr3=0x%016lx\n",
+		       (unsigned long)uefi_cr3);
+		return;
+	}
+	uint64_t *uefi_pml4 = (uint64_t *)(uintptr_t)uefi_pml4_virt;
 
 	// 新しいPML4用のフレームを割り当て
 	void *new_pml4_frame = alloc_frame();
@@ -155,7 +262,13 @@ void paging64_init_kernel_pml4(void) {
 	}
 
 	uint64_t new_pml4_phys = (uint64_t)(uintptr_t)new_pml4_frame;
-	uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_pml4_phys;
+	uint64_t new_pml4_virt = vmem_phys_to_virt64(new_pml4_phys);
+	if (new_pml4_virt == UINT64_MAX) {
+		printk("paging64_init_kernel_pml4: vmem_phys_to_virt64 failed for new_pml4_phys=0x%016lx\n",
+		       (unsigned long)new_pml4_phys);
+		return;
+	}
+	uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_pml4_virt;
 
 	// UEFIのPML4エントリをすべてコピー
 	for (int i = 0; i < 512; i++) {
@@ -171,8 +284,14 @@ void paging64_init_kernel_pml4(void) {
 	}
 	uint64_t pdpt_phys = (uint64_t)(uintptr_t)pdpt_frame;
 
+	uint64_t pdpt_virt = vmem_phys_to_virt64(pdpt_phys);
+	if (pdpt_virt == UINT64_MAX) {
+		printk("paging64_init_kernel_pml4: vmem_phys_to_virt64 failed for pdpt_phys=0x%016lx\n",
+		       (unsigned long)pdpt_phys);
+		return;
+	}
 	// PDPTをゼロクリア
-	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_phys;
+	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_virt;
 	for (int i = 0; i < 512; i++) {
 		pdpt[i] = 0;
 	}
@@ -186,7 +305,13 @@ void paging64_init_kernel_pml4(void) {
 			return;
 		}
 		uint64_t pd_phys = (uint64_t)(uintptr_t)pd_frame;
-		uint64_t *pd = (uint64_t *)(uintptr_t)pd_phys;
+		uint64_t pd_virt = vmem_phys_to_virt64(pd_phys);
+		if (pd_virt == UINT64_MAX) {
+			printk("paging64_init_kernel_pml4: vmem_phys_to_virt64 failed for pd_phys=0x%016lx\n",
+			       (unsigned long)pd_phys);
+			return;
+		}
+		uint64_t *pd = (uint64_t *)(uintptr_t)pd_virt;
 
 		// PDに512個の2MBページエントリを設定
 		for (int i = 0; i < 512; i++) {
@@ -212,8 +337,12 @@ void paging64_init_kernel_pml4(void) {
 	// カーネルPML4の物理アドレスを保存
 	kernel_pml4_phys = new_pml4_phys;
 
-	printk("paging64_init_kernel_pml4: Switched from UEFI PML4 (0x%lx) to kernel PML4 (0x%lx)\n",
+	printk("paging64_init_kernel_pml4: Switched from UEFI PML4 (0x%016lx) to kernel PML4 (0x%016lx)\n",
 	       uefi_cr3, new_pml4_phys);
+	/* Debug: print the newly created PML4[0] so we can verify the low-4GB
+     * identity mapping was installed correctly. */
+	printk("paging64_init_kernel_pml4: new_pml4[0]=0x%016lx uefi_pml4[0]=0x%016lx\n",
+	       (unsigned long)new_pml4[0], (unsigned long)uefi_pml4[0]);
 	printk("paging64_init_kernel_pml4: Added identity mapping for low 4GB (0x0-0xFFFFFFFF)\n");
 }
 
@@ -244,11 +373,27 @@ uint64_t paging64_create_user_pml4(void) {
 	}
 
 	uint64_t new_pml4_phys = (uint64_t)(uintptr_t)new_pml4_frame;
-	uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_pml4_phys;
-	uint64_t *kernel_pml4 = (uint64_t *)(uintptr_t)kernel_pml4_phys;
+	/* Convert physical addresses to kernel virtual addresses so we can
+	 * safely read/write the tables regardless of current CR3 mapping. */
+	uint64_t new_pml4_virt = vmem_phys_to_virt64(new_pml4_phys);
+	if (new_pml4_virt == UINT64_MAX) {
+		printk("paging64_create_user_pml4: vmem_phys_to_virt64 failed for new_pml4_phys=0x%016lx\n",
+		       (unsigned long)new_pml4_phys);
+		return 0;
+	}
+	uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_pml4_virt;
 
-	// ユーザー空間(PML4[0-255])をゼロクリア
-	for (int i = 0; i < 256; i++) {
+	uint64_t kernel_pml4_virt = vmem_phys_to_virt64(kernel_pml4_phys);
+	if (kernel_pml4_virt == UINT64_MAX) {
+		printk("paging64_create_user_pml4: vmem_phys_to_virt64 failed for kernel_pml4_phys=0x%016lx\n",
+		       (unsigned long)kernel_pml4_phys);
+		return 0;
+	}
+	uint64_t *kernel_pml4 = (uint64_t *)(uintptr_t)kernel_pml4_virt;
+
+	// ユーザー空間(PML4[1-255])をゼロクリア
+	// PML4[0]は後でカーネルからコピーする（カーネルコードへのアクセスに必要）
+	for (int i = 1; i < 256; i++) {
 		new_pml4[i] = 0;
 	}
 
@@ -257,9 +402,19 @@ uint64_t paging64_create_user_pml4(void) {
 		new_pml4[i] = kernel_pml4[i];
 	}
 
-	// 低位4GBのidentity mappingをコピー(PML4[0])
-	// これはalloc_frame()などカーネル機能が使用する
-	new_pml4[0] = kernel_pml4[0];
+    /*
+     * IMPORTANT: Copy kernel_pml4[0] to enable access to kernel code/data
+     * in low memory (identity-mapped region) even after CR3 switch.
+     * Without this, iretq instruction itself (which is in kernel code at low
+     * addresses) would cause a page fault when CR3 is switched to user PML4.
+     * 
+     * User mappings at low addresses will still work because map_page_64
+     * creates 4KB page tables which override the 2MB large pages from kernel.
+     */
+    new_pml4[0] = kernel_pml4[0];
+    printk("paging64_create_user_pml4: kernel_pml4_phys=0x%016lx kernel_pml4[0]=0x%016lx new_pml4[0]=0x%016lx\n",
+	    (unsigned long)kernel_pml4_phys, (unsigned long)kernel_pml4[0],
+	    (unsigned long)new_pml4[0]);
 
 	return new_pml4_phys;
 }
