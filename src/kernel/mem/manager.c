@@ -198,9 +198,36 @@ static void *kmalloc_internal(uint32_t size, int retry_count) {
 	// 見つからなかった - ヒープを拡張してリトライ
 	spin_unlock_irqrestore(&heap_lock, flags);
 
+	/* Calculate available heap space based on physical memory layout */
+	const memmap_t *mm = memmap_get();
+	uint64_t heap_limit;
+
+	if (mm && mm->start_addr > 0) {
+		heap_limit = mm->start_addr;
+		if (heap_limit > 0x100000) {
+			heap_limit -= 0x100000; /* 1MB safety margin */
+		}
+	} else {
+		heap_limit = 0x1000000; /* 16MB fallback */
+	}
+
+	uint64_t max_available =
+		(heap_end_addr < heap_limit) ? (heap_limit - heap_end_addr) : 0;
+
+	if (max_available < total_size) {
+		printk("mem: insufficient heap space - need %u but only %llu available (limit=0x%lx)\n",
+		       total_size, (unsigned long long)max_available,
+		       (unsigned long)heap_limit);
+		return NULL;
+	}
+
 	uint32_t expand_size = total_size;
-	if (expand_size < 0x100000) /* 1MB minimum */
+	/* Try to expand by at least 1MB if space permits, otherwise expand exactly what's needed */
+	if (expand_size < 0x100000 && max_available >= 0x100000)
 		expand_size = 0x100000;
+	/* But don't exceed available space */
+	if (expand_size > max_available)
+		expand_size = (uint32_t)max_available;
 
 	if (heap_expand(expand_size) == 0) {
 		/* Retry allocation after expansion */
@@ -322,6 +349,36 @@ static int heap_expand(uint32_t additional_size) {
 	/* Align to page boundary */
 	additional_size = (additional_size + 0x0FFF) & ~0x0FFF;
 
+	/* Calculate dynamic heap limit based on physical memory
+	 * Keep heap below where alloc_frame() starts allocating frames.
+	 * Use memmap_get() to determine the safe upper bound.
+	 */
+	const memmap_t *mm = memmap_get();
+	uint64_t heap_limit;
+
+	if (mm && mm->start_addr > 0) {
+		/* Set heap limit to start of frame allocator managed memory
+		 * Leave some safety margin (e.g., 1MB) */
+		heap_limit = mm->start_addr;
+		if (heap_limit > 0x100000) {
+			heap_limit -= 0x100000; /* 1MB safety margin */
+		}
+	} else {
+		/* Fallback: Use conservative 16MB limit if memmap not available */
+		heap_limit = 0x1000000; /* 16MB */
+	}
+
+	if (heap_end_addr + additional_size > heap_limit) {
+		printk("mem: heap_expand rejected - would exceed limit 0x%lx (current=0x%lx request=%u)\n",
+		       (unsigned long)heap_limit, (unsigned long)heap_end_addr,
+		       additional_size);
+		printk("mem: available space: %lu bytes\n",
+		       (unsigned long)(heap_limit > heap_end_addr ?
+					       heap_limit - heap_end_addr :
+					       0));
+		return -1;
+	}
+
 	/* CRITICAL: Do NOT call alloc_frame() here as it triggers kmalloc() recursion!
 	 * Instead, directly use the memory at heap_end_addr (identity-mapped).
 	 * Physical frame reservation can be done separately if needed.
@@ -391,6 +448,12 @@ static int heap_expand(uint32_t additional_size) {
 	}
 
 	heap_end_addr += additional_size;
+
+	/* Reserve the newly expanded heap frames in memmap */
+	uint64_t new_phys_start = (uint64_t)(new_block_addr);
+	uint64_t new_phys_end = (uint64_t)(new_block_addr + additional_size);
+	/* In identity-mapped low memory, virt == phys */
+	memmap_reserve(new_phys_start, new_phys_end);
 
 	/* Debug: verify free list after expansion (commented out for now)
 	printk("mem: free_list after expansion (first 3):\n");
@@ -470,11 +533,11 @@ int mem_has_space(mem_type_t type, uint32_t size) {
  */
 void memory_init() {
 	/* Expand managed physical memory range to cover more guest RAM.
-	 * Previous value was 1MB - 5MB (4MB). Increase to 1MB - 64MB
-	 * so the kernel can allocate more frames and provide a larger heap.
+	 * Reserve 0-8MB for kernel/heap, 8MB+ for frame allocation.
+	 * This avoids collision between heap and alloc_frame().
 	 */
-	/* initialize memmap for physical range 1MB - 64MB */
-	memmap_init(0x100000ULL, 0x4000000ULL); // 1MB - 64MB
+	/* initialize memmap for physical range 8MB - 128MB */
+	memmap_init(0x800000ULL, 0x8000000ULL); // 8MB - 128MB
 
 	extern uint32_t __end;
 	const memmap_t *mm = memmap_get();
@@ -528,6 +591,8 @@ void memory_init() {
 		printk("mem: WARNING memmap_reserve using virtual addresses as-phys start=0x%08x end=0x%08x\n",
 		       (unsigned)heap_start, (unsigned)heap_end);
 	}
+	printk("mem: Reserving heap frames: phys 0x%lx - 0x%lx (frames %lu - %lu)\n",
+	       phys_start, phys_end, phys_start / 0x1000, phys_end / 0x1000);
 	memmap_reserve(phys_start, phys_end);
 }
 

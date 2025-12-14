@@ -9,6 +9,55 @@
 #include <fs/vfs.h>
 #include <stdint.h>
 
+/* arch_prctl codes */
+#define ARCH_SET_GS 0x1001
+#define ARCH_SET_FS 0x1002
+#define ARCH_GET_FS 0x1003
+#define ARCH_GET_GS 0x1004
+
+/* MSR addresses for FS and GS base */
+#define MSR_FS_BASE 0xC0000100
+#define MSR_GS_BASE 0xC0000101
+
+static inline void wrmsr(uint32_t msr, uint64_t value) {
+	uint32_t low = (uint32_t)value;
+	uint32_t high = (uint32_t)(value >> 32);
+	asm volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
+}
+
+static inline uint64_t rdmsr(uint32_t msr) {
+	uint32_t low, high;
+	asm volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+	return ((uint64_t)high << 32) | low;
+}
+
+static uint64_t sys_arch_prctl(int code, uint64_t addr) {
+	switch (code) {
+	case ARCH_SET_FS:
+		wrmsr(MSR_FS_BASE, addr);
+		return 0;
+	case ARCH_SET_GS:
+		wrmsr(MSR_GS_BASE, addr);
+		return 0;
+	case ARCH_GET_FS:
+		/* addr is a pointer to store the FS base */
+		if (copy_to_user((void *)addr,
+				 &(uint64_t){ rdmsr(MSR_FS_BASE) },
+				 sizeof(uint64_t)) != 0)
+			return (uint64_t)-1;
+		return 0;
+	case ARCH_GET_GS:
+		/* addr is a pointer to store the GS base */
+		if (copy_to_user((void *)addr,
+				 &(uint64_t){ rdmsr(MSR_GS_BASE) },
+				 sizeof(uint64_t)) != 0)
+			return (uint64_t)-1;
+		return 0;
+	default:
+		return (uint64_t)-1;
+	}
+}
+
 static uint64_t sys_write(uint64_t fd, const void *buf, uint64_t len) {
 	return (uint64_t)vfs_write((int)fd, buf, (size_t)len);
 }
@@ -202,6 +251,8 @@ static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 		return sys_getpid();
 	case SYS_kill:
 		return sys_kill(a0, a1);
+	case 158: /* arch_prctl */
+		return sys_arch_prctl((int)a0, a1);
 	default:
 		return (uint64_t)-1; /* ENOSYS */
 	}

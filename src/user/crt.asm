@@ -14,11 +14,11 @@ _start:
     lea rax, [rel _impure_data]
     mov [rel _impure_ptr], rax
     ; set up a tiny TLS area and set FS base so newlib's TLS-based _REENT access works
-    lea rdi, [rel tls_area]        ; ARCH_SET_FS expects address in rsi, but syscall uses rdi/rsi per x86_64 ABI
+    lea rdi, [rel tls_area]        ; ARCH_SET_FS expects address in rsi, but int 0x80 uses rdi as first arg
     mov rax, 158                   ; syscall: arch_prctl
     mov rdi, 0x1002                ; ARCH_SET_FS
     lea rsi, [rel tls_area]
-    syscall
+    int 0x80                       ; Use int 0x80 instead of syscall
     call __stack_chk_init
     call main
     mov rdi, rax

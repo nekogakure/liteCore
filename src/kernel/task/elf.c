@@ -243,6 +243,10 @@ static int load_segment(int fd, const elf64_program_header_t *ph,
 		flags |= PAGING_RW;
 	}
 
+	printk("ELF: Loading segment type=%u vaddr=0x%lx memsz=%u filesz=%u flags=0x%x\n",
+	       ph->type, ph->vaddr, (unsigned)ph->memsz, (unsigned)ph->filesz,
+	       ph->flags);
+
 	// ファイルからデータを読み込む準備
 	if (ph->filesz > 0) {
 		vfs_lseek(fd, ph->offset, SEEK_SET);
@@ -261,6 +265,7 @@ static int load_segment(int fd, const elf64_program_header_t *ph,
 		// カーネル仮想アドレスに変換してゼロクリア
 		uint32_t page_virt =
 			vmem_phys_to_virt((uint32_t)(uintptr_t)page_phys);
+
 		memset((void *)(uintptr_t)page_virt, 0, 4096);
 
 		// このページにファイルデータを読み込む（該当する場合）
@@ -360,6 +365,7 @@ int elf_run(const char *path) {
 
 	// プログラムヘッダーを読み込んでセグメントをロード
 	// 既存のページディレクトリにマップする
+	printk("ELF: Loading %d program headers for %s\n", header.phnum, path);
 	for (uint16_t i = 0; i < header.phnum; i++) {
 		elf64_program_header_t ph;
 		vfs_lseek(fd, header.phoff + i * sizeof(elf64_program_header_t),
