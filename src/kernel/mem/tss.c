@@ -55,25 +55,25 @@ void tss_init(void) {
 	tss.iopb_offset = sizeof(tss_entry_t);
 
 	// GDTを再構築してTSSディスクリプタを追加
-	// 既存: NULL(0), kernel code(1), kernel data(2), user code(3), user data(4)
-	// 追加: TSS(5-6) - 64ビットTSSは2エントリを占有
+	// 既存: NULL(0), kernel code(1), kernel data(2), user code 32-bit(3), user data(4), user code 64-bit(5)
+	// 追加: TSS(6-7) - 64ビットTSSは2エントリを占有
 	uint64_t tss_base = (uint64_t)(uintptr_t)&tss;
 	uint32_t tss_limit = sizeof(tss_entry_t) - 1;
 
 	// TSSディスクリプタを設定（アクセス権: 0x89 = Present, DPL=0, Type=Available TSS）
-	gdt_set_tss(5, tss_base, tss_limit, 0x89, 0x00);
+	gdt_set_tss(6, tss_base, tss_limit, 0x89, 0x00);
 
-	// GDTのリミットを更新（7エントリ分 = NULL + kcode + kdata + ucode + udata + TSS(2))
-	gp.limit = (sizeof(struct gdt_entry) * 7) - 1;
+	// GDTのリミットを更新（8エントリ分 = NULL + kcode + kdata + ucode32 + udata + ucode64 + TSS(2))
+	gp.limit = (sizeof(struct gdt_entry) * 8) - 1;
 
 	// GDTをリロード
 	gdt_install_lgdt();
 
-	// TSSをロード（セレクタ = 5 * 8 = 0x28）
-	asm volatile("ltr %%ax" : : "a"(0x28));
+	// TSSをロード（セレクタ = 6 * 8 = 0x30）
+	asm volatile("ltr %%ax" : : "a"(0x30));
 
 #ifdef INIT_MSG
-	printk("tss_init: TSS initialized at 0x%016lx, selector=0x28\n",
+	printk("tss_init: TSS initialized at 0x%016lx, selector=0x30\n",
 	       tss_base);
 #endif
 }

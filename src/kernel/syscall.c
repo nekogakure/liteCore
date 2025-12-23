@@ -18,6 +18,14 @@
 /* MSR addresses for FS and GS base */
 #define MSR_FS_BASE 0xC0000100
 #define MSR_GS_BASE 0xC0000101
+#define MSR_EFER 0xC0000080
+#define MSR_STAR 0xC0000081
+#define MSR_LSTAR 0xC0000082
+#define MSR_CSTAR 0xC0000083
+#define MSR_SFMASK 0xC0000084
+
+/* EFER bits */
+#define EFER_SCE (1 << 0) /* System Call Extensions */
 
 static inline void wrmsr(uint32_t msr, uint64_t value) {
 	uint32_t low = (uint32_t)value;
@@ -261,6 +269,12 @@ static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 void syscall_entry_c(uint64_t *regs_stack, uint32_t vec) {
 	(void)vec;
 	uint64_t num = regs_stack[0];
+
+	/* Debug: Print syscall info */
+	// printk("SYSCALL: num=%llu rdi=%llx rsi=%llx rdx=%llx\n",
+	//        (unsigned long long)num, (unsigned long long)regs_stack[6],
+	//        (unsigned long long)regs_stack[5], (unsigned long long)regs_stack[2]);
+
 	/* some registers are not used by our syscall dispatch; suppress warnings */
 	(void)vec;
 	uint64_t rax = regs_stack[0];
@@ -292,4 +306,58 @@ void syscall_entry_c(uint64_t *regs_stack, uint32_t vec) {
 	uint64_t ret = dispatch_syscall(num, a0, a1, a2, a3, a4, a5);
 
 	regs_stack[0] = ret;
+
+	// printk("SYSCALL: returning ret=%llx\n", (unsigned long long)ret);
+}
+
+/* syscall instruction handler (defined in syscall_handler.asm) */
+extern void syscall_handler(void);
+
+/**
+ * Initialize SYSCALL instruction support
+ * Sets up MSRs for fast system calls
+ */
+void syscall_init(void) {
+	uint64_t efer;
+
+	/* Enable SYSCALL/SYSRET instructions */
+	efer = rdmsr(MSR_EFER);
+	efer |= EFER_SCE;
+	wrmsr(MSR_EFER, efer);
+
+	/* Set up STAR MSR: CS/SS selectors
+	 * New GDT layout (for SYSRET compatibility):
+	 *   0x00: NULL
+	 *   0x08: Kernel Code (64-bit)
+	 *   0x10: Kernel Data
+	 *   0x18: User Code (32-bit) - for SYSRET
+	 *   0x20: User Data
+	 *   0x28: User Code (64-bit) - actual 64-bit user code
+	 * 
+	 * SYSCALL behavior:
+	 *   CS = STAR[47:32]
+	 *   SS = STAR[47:32] + 8
+	 * 
+	 * SYSRET behavior:
+	 *   CS = (STAR[63:48] + 16) | 3  => Should be 0x2B (0x28 + 3)
+	 *   SS = (STAR[63:48] + 8) | 3   => Should be 0x23 (0x20 + 3)
+	 * 
+	 * For CS = (STAR[63:48] + 16) | 3 = 0x2B:
+	 *   STAR[63:48] + 16 = 0x28
+	 *   STAR[63:48] = 0x18
+	 * 
+	 * Verify SS = (0x18 + 8) | 3 = 0x20 | 3 = 0x23 ✓
+	 * 
+	 * STAR = (0x18 << 48) | (0x08 << 32)
+	 */
+	uint64_t star = ((uint64_t)0x18 << 48) | ((uint64_t)0x08 << 32);
+	wrmsr(MSR_STAR, star);
+
+	/* Set up LSTAR: syscall entry point */
+	wrmsr(MSR_LSTAR, (uint64_t)syscall_handler);
+
+	/* Set up SFMASK: RFLAGS mask (clear IF to disable interrupts) */
+	wrmsr(MSR_SFMASK, 0x200); /* Clear IF flag during syscall */
+
+	printk("syscall: SYSCALL instruction support enabled\n");
 }

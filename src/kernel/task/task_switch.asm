@@ -172,24 +172,29 @@ task_restore:
 global task_enter_usermode
 task_enter_usermode:
     ; rdi = entry (RIP)
-    ; rsi = user_stack (RSP)
+    ; rsi = user_stack (RSP) - already points to argc on stack
     ; rdx = page_directory (CR3)
     cli  ; 割り込みを無効化
+    
+    ; 引数を安全なレジスタに退避（iretqフレーム構築中に保護）
+    mov r8, rdi    ; r8 = user RIP
+    mov r9, rsi    ; r9 = user RSP
+    mov r10, rdx   ; r10 = page directory
     
     ; iretq用にスタックフレームを構成
     ; スタック: SS, RSP, RFLAGS, CS, RIP の順（逆順でプッシュ）
     
-    push 0x23      ; SS (ユーザーデータセグメント)
-    push rsi       ; RSP (ユーザースタック)
     pushfq         ; 現在のRFLAGSを保存
     pop rax
     or rax, 0x200  ; IF=1を確実にセット
-    push rax       ; RFLAGS
-    push 0x1B      ; CS (ユーザーコードセグメント)
-    push rdi       ; RIP (エントリポイント)
     
-    ; CR3 をユーザのページディレクトリに切り替える
-    mov cr3, rdx
+    push 0x23      ; SS (ユーザーデータセグメント)
+    push r9        ; RSP (ユーザースタック、argc を指している)
+    push rax       ; RFLAGS (編集済み)
+    push 0x2B      ; CS (64-bit ユーザーコードセグメント 0x28 + RPL3)
+    push r8        ; RIP (エントリポイント、r8から復元)
+    
+    mov cr3, r10
     
     ; ユーザーモードへ移行
     iretq

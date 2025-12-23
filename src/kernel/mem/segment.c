@@ -3,8 +3,8 @@
 #include <stddef.h>
 #include <mem/segment.h>
 
-/* ここではNULL, kernel code, kernel data, user code, user data, TSS(2エントリ)の7つ */
-struct gdt_entry gdt_entries[7];
+/* NULL, kernel code, kernel data, user code 32-bit, user data, user code 64-bit, TSS(2エントリ) = 8 */
+struct gdt_entry gdt_entries[8];
 struct gdt_ptr gp;
 
 static void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access,
@@ -21,17 +21,27 @@ static void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access,
 }
 
 void gdt_build() {
+	/* 
+	 * 0x00: NULL
+	 * 0x08: Kernel Code (64-bit)
+	 * 0x10: Kernel Data
+	 * 0x18: User Code (32-bit) - for SYSRET compatibility
+	 * 0x20: User Data
+	 * 0x28: User Code (64-bit) - actual user code segment
+	 */
 	gdt_set_gate(0, 0, 0, 0, 0); /* NULL descriptor */
 	gdt_set_gate(1, 0x0, 0xFFFFF, 0x9A,
 		     0xAF); /* 64-bit kernel code: 0xAF = Long mode */
 	gdt_set_gate(
 		2, 0x0, 0xFFFFF, 0x92,
 		0xCF); /* kernel data: 0xCF = 32-bit (L-bit must be 0 for data) */
-	gdt_set_gate(3, 0x0, 0xFFFFF, 0xFA, 0xAF); /* 64-bit user code: L=1 */
+	gdt_set_gate(3, 0x0, 0xFFFFF, 0xFA,
+		     0xCF); /* 32-bit user code (for SYSRET) */
 	gdt_set_gate(
 		4, 0x0, 0xFFFFF, 0xF2,
 		0xCF); /* user data: 0xCF = 32-bit (L-bit must be 0 for data) */
-	gp.limit = (sizeof(struct gdt_entry) * 5) - 1;
+	gdt_set_gate(5, 0x0, 0xFFFFF, 0xFA, 0xAF); /* 64-bit user code: L=1 */
+	gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
 	gp.base = (uint64_t)&gdt_entries;
 }
 

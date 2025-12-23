@@ -100,7 +100,7 @@ void debug_print_iretq_frame(uint64_t rip, uint64_t rsp, uint64_t cr3) {
 	asm volatile("pushfq; pop %0" : "=r"(rflags));
 	rflags |= 0x200; // IF=1
 
-	printk("IRETQ-FRAME: RIP=0x%lx CS=0x1B RFLAGS=0x%lx RSP=0x%lx SS=0x23 CR3=0x%lx\n",
+	printk("IRETQ-FRAME: RIP=0x%lx CS=0x2B RFLAGS=0x%lx RSP=0x%lx SS=0x23 CR3=0x%lx\n",
 	       rip, rflags, rsp, cr3);
 
 	// Dump GDT to verify segment descriptors
@@ -360,8 +360,25 @@ int elf_run(const char *path) {
 		return -1;
 	}
 	// スタックトップに設定（下向きに成長するため、マップしたページの最上位アドレス）
-	uint64_t user_stack_top =
-		user_stack_virt + 0x1000 - 8; // 8バイト下げてアライメント確保
+	// Note: Normally x86-64 ABI expects RSP to be (16n + 8) before a call instruction,
+	// but newlib's _start and initialization code appear to expect RSP to be 16-byte aligned (16n).
+	// This may be due to how newlib was compiled or CRT setup requirements.
+	uint64_t user_stack_top = (user_stack_virt + 0x1000) & ~0xFULL;
+	
+	// Setup initial stack contents (argc = 0) using kernel mapping
+	// Convert user stack physical address to kernel virtual address
+	uint64_t kernel_stack_virt = vmem_phys_to_virt64(user_stack_phys);
+	if (kernel_stack_virt == UINT64_MAX) {
+		printk("ELF: Failed to map user stack to kernel virtual address\n");
+		vfs_close(fd);
+		return -1;
+	}
+	// Write argc=0 at the top of stack (RSP will point here)
+	// Stack grows down, so we write at offset (0x1000 - 8)
+	uint64_t *stack_ptr = (uint64_t *)(uintptr_t)(kernel_stack_virt + 0x1000 - 8);
+	*stack_ptr = 0;  // argc = 0
+	// user_stack_top stays at 16-byte boundary, pointing just above argc
+	// (no need to subtract 8, keeping it at 16n for newlib compatibility)
 
 	// プログラムヘッダーを読み込んでセグメントをロード
 	// 既存のページディレクトリにマップする

@@ -17,5 +17,6 @@
 #define SYS_kill 12
 
 void syscall_entry_c(uint64_t *regs_stack, uint32_t vec);
+void syscall_init(void);
 
 #endif /* _KERNEL_SYSCALL_H */

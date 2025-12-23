@@ -168,7 +168,28 @@ void irq_exception_ex(uint32_t vec, uint32_t error_code) {
 
 		saved_rip = maybe_rip;
 		saved_cs = maybe_cs;
-		saved_rsp = 0; /* kernel-mode exception: SS/RSP not pushed */
+
+		/* Check if this is a user-mode exception (CS & 3 != 0) */
+		if ((maybe_cs & 3) != 0) {
+			/* User-mode exception: SS and RSP are pushed */
+			/* Stack layout: [..., RIP, CS, RFLAGS, RSP, SS] */
+			/* After finding RIP at stack_ptr[idx], RSP is at stack_ptr[idx+3] */
+			int rip_idx = 17;
+			for (int idx = 17; idx <= 20; idx++) {
+				if (stack_ptr[idx] == maybe_rip) {
+					rip_idx = idx;
+					break;
+				}
+			}
+			if (rip_idx + 3 <= 23) {
+				saved_rsp = stack_ptr[rip_idx + 3];
+			} else {
+				saved_rsp = 0;
+			}
+		} else {
+			/* Kernel-mode exception: SS/RSP not pushed */
+			saved_rsp = 0;
+		}
 	}
 
 	const char *exception_names[] = { "Divide by Zero",

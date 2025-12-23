@@ -1,6 +1,3 @@
-# Apps Makefile
-# Build application ELF executables with newlib
-
 CC         = gcc
 NASM       = nasm
 
@@ -13,12 +10,12 @@ LIB_DIR    = ../../bin/lib
 # Compiler flags for user programs
 CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable \
              -ffreestanding -m64 -c -Wall -Wextra \
-             -mcmodel=large -mno-red-zone -fno-pic \
+             -mcmodel=small -mno-red-zone -fno-pic -no-pie \
              -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin \
              -I$(LIB_DIR)/targ-include
 
 # Linker flags
-LDFLAGS    = -nostdlib -static
+LDFLAGS    = -nostdlib -static -no-pie
 USER_LDFLAGS = -L$(LIB_DIR) -lc
 
 # Source files - automatically detect all .c files
@@ -68,16 +65,22 @@ $(OUT_DIR)/%.elf: $(OUT_DIR)/%.o $(CRT_OBJ) $(SYSCALL_OBJ) $(STDIO_OBJ)
 	@mkdir -p $(dir $@)
 	@echo "Linking app ELF: $@"
 	@if [ -f "$(LIB_DIR)/libc.a" ]; then \
-		$(CC) $(LDFLAGS) $^ $(USER_LDFLAGS) -o $@; \
+		$(CC) $(LDFLAGS) -Wl,--build-id=none $^ $(USER_LDFLAGS) -o $@; \
 	else \
 		echo "Warning: libc.a not found, linking without newlib"; \
-		$(CC) $(LDFLAGS) $^ -o $@; \
+		$(CC) $(LDFLAGS) -Wl,--build-id=none $^ -o $@; \
 	fi
 
 # Special case: test.elf (minimal, no libc)
 $(OUT_DIR)/test.elf: $(OUT_DIR)/test.o
 	@mkdir -p $(dir $@)
 	@echo "Linking minimal test ELF: $@"
+	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
+
+# Special case: hello_simple.elf (minimal, no libc, direct syscalls)
+$(OUT_DIR)/hello_simple.elf: $(OUT_DIR)/hello_simple.o
+	@mkdir -p $(dir $@)
+	@echo "Linking minimal hello_simple ELF: $@"
 	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
 
 clean:

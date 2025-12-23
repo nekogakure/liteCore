@@ -19,6 +19,7 @@
 #include <fs/vfs.h>
 #include <fs/block_cache.h>
 #include <task/multi_task.h>
+#include <syscall.h>
 
 #ifdef UEFI_MODE
 #include <driver/timer/uefi_timer.h>
@@ -56,6 +57,7 @@ void kernel_init() {
 
 	idt_init();
 	interrupt_init();
+	syscall_init(); /* Initialize SYSCALL instruction support */
 #ifdef INIT_MSG
 	printk("ok\n");
 #endif
