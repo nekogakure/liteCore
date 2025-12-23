@@ -349,22 +349,34 @@ int elf_run(const char *path) {
 	uint64_t pd_phys = new_task->page_directory;
 	uint64_t user_stack_phys = new_task->user_stack;
 
-	// ユーザースタックをユーザー空間の仮想アドレスにマップ
-	// 注意: タスクの新しいPML4にマップする必要があるため、map_page_64()を直接使用
-	uint64_t user_stack_virt = 0x7FFFE000ULL; // 2GB - 8KB
-	if (map_page_64(pd_phys, user_stack_phys, user_stack_virt,
-			PAGING_RW | PAGING_USER | PAGING_PRESENT) != 0) {
-		printk("ELF: Failed to map user stack at 0x%lx\n",
-		       user_stack_virt);
-		vfs_close(fd);
-		return -1;
+// ユーザースタックをユーザー空間の仮想アドレスにマップ
+// USER_STACK_SIZE (16KB = 4 pages) を全てマップする
+#define USER_STACK_SIZE 0x4000 // 16KB (from multi_task.c)
+#define PAGE_SIZE_4K 0x1000
+	uint64_t stack_pages = USER_STACK_SIZE / PAGE_SIZE_4K; // 4 pages
+	uint64_t user_stack_base =
+		0x7FFFB000ULL; // Start of stack area (2GB - 20KB)
+
+	// Map all stack pages
+	for (uint64_t i = 0; i < stack_pages; i++) {
+		uint64_t virt_addr = user_stack_base + (i * PAGE_SIZE_4K);
+		uint64_t phys_addr = user_stack_phys + (i * PAGE_SIZE_4K);
+		if (map_page_64(pd_phys, phys_addr, virt_addr,
+				PAGING_RW | PAGING_USER | PAGING_PRESENT) !=
+		    0) {
+			printk("ELF: Failed to map user stack page %llu at 0x%lx\n",
+			       (unsigned long long)i, virt_addr);
+			vfs_close(fd);
+			return -1;
+		}
 	}
-	// スタックトップに設定（下向きに成長するため、マップしたページの最上位アドレス）
+
+	// スタックトップに設定（下向きに成長するため、マップした領域の最上位アドレス）
 	// Note: Normally x86-64 ABI expects RSP to be (16n + 8) before a call instruction,
 	// but newlib's _start and initialization code appear to expect RSP to be 16-byte aligned (16n).
 	// This may be due to how newlib was compiled or CRT setup requirements.
-	uint64_t user_stack_top = (user_stack_virt + 0x1000) & ~0xFULL;
-	
+	uint64_t user_stack_top = (user_stack_base + USER_STACK_SIZE) & ~0xFULL;
+
 	// Setup initial stack contents (argc = 0) using kernel mapping
 	// Convert user stack physical address to kernel virtual address
 	uint64_t kernel_stack_virt = vmem_phys_to_virt64(user_stack_phys);
@@ -374,9 +386,10 @@ int elf_run(const char *path) {
 		return -1;
 	}
 	// Write argc=0 at the top of stack (RSP will point here)
-	// Stack grows down, so we write at offset (0x1000 - 8)
-	uint64_t *stack_ptr = (uint64_t *)(uintptr_t)(kernel_stack_virt + 0x1000 - 8);
-	*stack_ptr = 0;  // argc = 0
+	// Stack is 16KB, so the top is at offset (USER_STACK_SIZE - 8)
+	uint64_t *stack_ptr = (uint64_t *)(uintptr_t)(kernel_stack_virt +
+						      USER_STACK_SIZE - 8);
+	*stack_ptr = 0; // argc = 0
 	// user_stack_top stays at 16-byte boundary, pointing just above argc
 	// (no need to subtract 8, keeping it at 16n for newlib compatibility)
 

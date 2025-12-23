@@ -80,8 +80,10 @@ static void sys_exit(int code) {
 #define PAGE_SIZE 0x1000u
 
 static uint64_t sys_sbrk(intptr_t inc) {
+	printk("SBRK START\n");
 	task_t *t = task_current();
 	if (!t) {
+		printk("SBRK: no task\n");
 		return (uint64_t)-1;
 	}
 
@@ -89,29 +91,35 @@ static uint64_t sys_sbrk(intptr_t inc) {
 		/* initialize program break base */
 		t->user_brk = (uint64_t)USER_HEAP_BASE;
 		t->user_brk_size = 0;
+		printk("SBRK: init heap at %llx\n",
+		       (unsigned long long)USER_HEAP_BASE);
 	}
 
 	uint64_t current_brk = t->user_brk + t->user_brk_size;
 
 	if (inc == 0) {
 		/* return current program break */
+		printk("SBRK(0): ret=%llx\n", (unsigned long long)current_brk);
 		return current_brk;
 	}
 
 	if (inc < 0) {
 		/* shrinking not implemented */
+		printk("SBRK: shrink not supported\n");
 		return (uint64_t)-1;
 	}
 
+	printk("SBRK: brk=%llx inc=%lld\n", (unsigned long long)current_brk,
+	       (long long)inc);
+
 	uint64_t new_end = current_brk + (uint64_t)inc;
 
-	uint32_t prev_page = (uint32_t)(current_brk & ~(PAGE_SIZE - 1));
-	uint32_t new_page_end =
-		(uint32_t)((new_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+	uint64_t prev_page = current_brk & ~(PAGE_SIZE - 1);
+	uint64_t new_page_end = (new_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
 	uint32_t pages = 0;
 	if (new_page_end > prev_page)
-		pages = (new_page_end - prev_page) / PAGE_SIZE;
+		pages = (uint32_t)((new_page_end - prev_page) / PAGE_SIZE);
 
 	if (pages == 0) {
 		/* no page boundary crossed, just increase size */
@@ -139,10 +147,11 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	}
 
 	/* map frames into the task page directory */
-	uint32_t va = prev_page;
+	uint64_t va = prev_page;
 	int map_failed = 0;
 	for (uint32_t i = 0; i < pages; ++i, va += PAGE_SIZE) {
-		if (map_page_pd((uint32_t)t->page_directory, allocated_phys[i],
+		/* Use map_page_64 for 64-bit address space */
+		if (map_page_64(t->page_directory, (uint64_t)allocated_phys[i],
 				va, PAGING_PRESENT | PAGING_RW | PAGING_USER) !=
 		    0) {
 			map_failed = 1;
@@ -150,11 +159,9 @@ static uint64_t sys_sbrk(intptr_t inc) {
 			for (uint32_t j = i; j < pages; ++j)
 				free_frame(
 					(void *)(uintptr_t)allocated_phys[j]);
-			/* unmap and free already-mapped frames */
-			uint32_t un_va = prev_page;
-			for (uint32_t j = 0; j < i; ++j, un_va += PAGE_SIZE) {
-				unmap_page_pd((uint32_t)t->page_directory,
-					      un_va);
+			/* TODO: unmap already-mapped pages (requires unmap_page_64) */
+			/* For now, just free the physical frames */
+			for (uint32_t j = 0; j < i; ++j) {
 				free_frame(
 					(void *)(uintptr_t)allocated_phys[j]);
 			}
@@ -169,10 +176,9 @@ static uint64_t sys_sbrk(intptr_t inc) {
 
 	/* success - bump break size and return old break */
 	uint64_t old_brk = current_brk;
-	t->user_brk_size = (uint64_t)(new_page_end - (uint32_t)t->user_brk) +
-			   (new_end - new_page_end);
-	/* simpler: set size to new_end - base */
 	t->user_brk_size = new_end - t->user_brk;
+	printk("SBRK: OK old=%llx new=%llx pages=%u\n",
+	       (unsigned long long)old_brk, (unsigned long long)new_end, pages);
 	return old_brk;
 }
 
@@ -233,6 +239,14 @@ static uint64_t sys_kill(uint64_t pid, uint64_t sig) {
 static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 				 uint64_t a2, uint64_t a3, uint64_t a4,
 				 uint64_t a5) {
+	(void)a1;
+	(void)a2;
+	(void)a3;
+	(void)a4;
+	(void)a5; /* suppress unused warnings */
+	printk("SYSCALL num=");
+	printk("%llu", (unsigned long long)num);
+	printk("\n");
 	switch (num) {
 	case SYS_write:
 		return sys_write(a0, (const void *)a1, a2);

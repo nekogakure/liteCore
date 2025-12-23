@@ -31,6 +31,10 @@ CRT_OBJ = $(OUT_DIR)/crt.o
 SYSCALL_SRC = $(USER_DIR)/syscall.c
 SYSCALL_OBJ = $(OUT_DIR)/syscall.o
 
+# Newlib syscalls implementation
+NEWLIB_SYSCALLS_SRC = $(LIB_DIR)/newlib_syscalls.c
+NEWLIB_SYSCALLS_OBJ = $(OUT_DIR)/newlib_syscalls.o
+
 # Stdio stub
 STDIO_SRC = $(USER_DIR)/stdio_stub.c
 STDIO_OBJ = $(OUT_DIR)/stdio.o
@@ -55,13 +59,18 @@ $(SYSCALL_OBJ): $(SYSCALL_SRC)
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Newlib syscalls object
+$(NEWLIB_SYSCALLS_OBJ): $(NEWLIB_SYSCALLS_SRC)
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 # Stdio stub object
 $(STDIO_OBJ): $(STDIO_SRC)
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Link app ELFs with newlib
-$(OUT_DIR)/%.elf: $(OUT_DIR)/%.o $(CRT_OBJ) $(SYSCALL_OBJ) $(STDIO_OBJ)
+$(OUT_DIR)/%.elf: $(OUT_DIR)/%.o $(CRT_OBJ) $(NEWLIB_SYSCALLS_OBJ) $(STDIO_OBJ)
 	@mkdir -p $(dir $@)
 	@echo "Linking app ELF: $@"
 	@if [ -f "$(LIB_DIR)/libc.a" ]; then \

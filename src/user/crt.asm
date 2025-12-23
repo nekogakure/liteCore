@@ -17,12 +17,12 @@ _start:
     mov rax, 158                   ; syscall: arch_prctl
     mov rdi, 0x1002                ; ARCH_SET_FS
     lea rsi, [rel tls_area]
-    int 0x80                       ; Use int 0x80 for syscall
+    syscall                        ; Use syscall instruction
     call __stack_chk_init
     call main
     mov rdi, rax
     mov rax, 2
-    int 0x80                       ; exit syscall
+    syscall                        ; exit syscall
 
 .halt:
     ; Don't use hlt (privileged instruction)
