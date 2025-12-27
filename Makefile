@@ -154,3 +154,8 @@ clean-all: clean
 	@echo "Cleaning all including EDK2..."
 	@cd $(EDK2_DIR) && rm -rf bin/boot
 	@rm -f $(ESP_IMG) $(FS_IMG)
+
+fmt:
+	@echo "Formatting..."
+	@./tools/fmt.sh
+	@echo "Done. :D"

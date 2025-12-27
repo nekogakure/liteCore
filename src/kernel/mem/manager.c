@@ -274,16 +274,6 @@ void kfree(void *ptr) {
 			(uint32_t *)((uintptr_t)hdr + sizeof(block_header_t) +
 				     user_bytes_with_canary - sizeof(uint32_t));
 		if (*canary != KMALLOC_CANARY) {
-			uint32_t got = *canary;
-			uint32_t tag = hdr->tag;
-
-			uint8_t *user_ptr =
-				(uint8_t *)hdr + sizeof(block_header_t);
-			uint8_t *ctx_start =
-				user_ptr +
-				(user_bytes_with_canary > 16 ?
-					 user_bytes_with_canary - 16 :
-					 0);
 			uint32_t ctx_len = (user_bytes_with_canary > 16) ?
 						   24 :
 						   (user_bytes_with_canary + 8);
@@ -291,14 +281,6 @@ void kfree(void *ptr) {
 				ctx_len = user_bytes_with_canary + 8;
 			if (ctx_len > 64)
 				ctx_len = 64;
-
-			for (uint32_t i = 0; i < ctx_len; ++i) {
-				uint8_t v = ctx_start[i];
-				printk("%02x", v);
-				if ((i & 0xF) == 0xF)
-					printk(" ");
-			}
-			printk("\n");
 		}
 	}
 

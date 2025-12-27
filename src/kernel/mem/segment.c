@@ -46,21 +46,3 @@ void gdt_build() {
 }
 
 void gdt_install();
-
-#if 0 // デバッグ用 - 必要に応じて有効化
-void gdt_dump(void) {
-	extern void printk(const char *fmt, ...);
-	printk("[GDT DUMP] gp.base=0x%016lx gp.limit=0x%04x\n", gp.base,
-	       gp.limit);
-	for (int i = 0; i < 5; i++) {
-		unsigned char *b = (unsigned char *)&gdt_entries[i];
-		printk("gdt[%d]: ", i);
-		for (size_t j = 0; j < sizeof(struct gdt_entry); j++) {
-			printk("%02x", b[j]);
-			if (j != sizeof(struct gdt_entry) - 1)
-				printk(":");
-		}
-		printk("\n");
-	}
-}
-#endif
