@@ -1,4 +1,7 @@
 #include <stdio.h>
+#undef stdin
+#undef stdout
+#undef stderr
 
 FILE __stdin_FILE = { 0 };
 FILE __stdout_FILE = { 0 };

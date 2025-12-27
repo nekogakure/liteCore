@@ -2,6 +2,8 @@
 #include <sys/stat.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <reent.h>
+#include <string.h>
 
 #ifdef __litecore__
 struct _reent;
@@ -194,15 +196,24 @@ int _kill(int pid, int sig) {
 
 /* LiteCore-specific syscalls */
 #ifdef __litecore__
+
 __attribute__((constructor)) static void _newlib_reent_init(void) {
 	/* Try to use LiteCore's custom get_reent syscall */
 	const long alloc_size = 4096;
 	long r = linux_syscall6(SYS_get_reent, alloc_size, 0, 0, 0, 0, 0);
-	if (r == -1)
+
+	if (r == -1) {
 		return; /* Allocation failed */
+	}
 
 	/* On LiteCore, set up _impure_ptr */
 	extern struct _reent *_impure_ptr;
 	_impure_ptr = (struct _reent *)(uintptr_t)r;
+
+	/* reent構造体のフィールドを初期化 */
+	_REENT_INIT_PTR(_impure_ptr);
+
+	/* stdio初期化 */
+	__sinit(_impure_ptr);
 }
 #endif

@@ -6,13 +6,14 @@ SRC_DIR    = .
 OUT_DIR    = ../../bin/apps
 USER_DIR   = ../user
 LIB_DIR    = ../../bin/lib
+NEWLIB_DIR = ../../newlib/newlib/libc/include
 
-# Compiler flags for user programs
 CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable \
-             -ffreestanding -m64 -c -Wall -Wextra \
-             -mcmodel=small -mno-red-zone -fno-pic -no-pie \
-             -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin \
-             -I$(LIB_DIR)/targ-include
+			 -ffreestanding -m64 -c -Wall -Wextra \
+			 -mcmodel=small -mno-red-zone -fno-pic -no-pie \
+			 -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin \
+			 -D__litecore__ \
+			 -I$(LIB_DIR)/targ-include -I$(NEWLIB_DIR)
 
 # Linker flags
 LDFLAGS    = -nostdlib -static -no-pie

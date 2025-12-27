@@ -11,10 +11,10 @@ LIB_DIR    = ../../bin/lib
 
 # Compiler flags for user programs
 CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable \
-             -ffreestanding -m64 -c -Wall -Wextra \
-             -mcmodel=large -mno-red-zone -fno-pic \
-             -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin \
-             -I$(LIB_DIR)/targ-include
+			 -ffreestanding -m64 -c -Wall -Wextra \
+			 -mcmodel=large -mno-red-zone -fno-pic \
+			 -fcf-protection=none -D_FORTIFY_SOURCE=0 -fno-builtin \
+			 -I$(LIB_DIR)/targ-include -I../../newlib/newlib/libc/include
 
 # Linker flags
 LDFLAGS    = -nostdlib -static

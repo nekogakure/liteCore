@@ -2,7 +2,8 @@
     "files.exclude": {
             "**/newlib": true,
             "**/uefi": true,
-            "**/.zed": true
+            "**/.zed": true,
+            "**/.idea": true
     },
     "search.exclude": {
             "**/newlib": true,

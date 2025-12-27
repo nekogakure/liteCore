@@ -19,6 +19,21 @@ SECTIONS
         *(.got .got.plt)
     }
 
+    /* Constructor/Destructor arrays */
+    .init_array : ALIGN(8) {
+        __init_array_start = .;
+        KEEP(*(.init_array .init_array.*))
+        KEEP(*(.ctors))
+        __init_array_end = .;
+    }
+
+    .fini_array : ALIGN(8) {
+        __fini_array_start = .;
+        KEEP(*(.fini_array .fini_array.*))
+        KEEP(*(.dtors))
+        __fini_array_end = .;
+    }
+
     .bss : ALIGN(0x1000) {
         *(COMMON)
         *(.bss .bss.*)

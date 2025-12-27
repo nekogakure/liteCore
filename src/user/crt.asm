@@ -13,21 +13,44 @@ _start:
     xor rsi, rsi
     lea rax, [rel _impure_data]
     mov [rel _impure_ptr], rax
-    ; set up a tiny TLS area and set FS base so newlib's TLS-based _REENT access works
-    mov rax, 158                   ; syscall: arch_prctl
-    mov rdi, 0x1002                ; ARCH_SET_FS
+    mov rax, 158
+    mov rdi, 0x1002
     lea rsi, [rel tls_area]
-    syscall                        ; Use syscall instruction
+    syscall
     call __stack_chk_init
+    
+
+    call run_init_array
+
     call main
+    
     mov rdi, rax
-    mov rax, 2
-    syscall                        ; exit syscall
+    mov rax, 60
+    syscall
 
 .halt:
-    ; Don't use hlt (privileged instruction)
-    ; Just loop indefinitely
     jmp .halt
+
+run_init_array:
+    push rbx
+    extern __init_array_start
+    extern __init_array_end
+    lea rbx, [rel __init_array_start]
+    lea rcx, [rel __init_array_end]
+    cmp rbx, rcx
+    jae .done
+.loop:
+    mov rax, [rbx]
+    test rax, rax
+    jz .skip
+    call rax
+.skip:
+    add rbx, 8
+    cmp rbx, rcx
+    jb .loop
+.done:
+    pop rbx
+    ret
 
 section .data
 align 16
