@@ -276,9 +276,6 @@ void kfree(void *ptr) {
 		if (*canary != KMALLOC_CANARY) {
 			uint32_t got = *canary;
 			uint32_t tag = hdr->tag;
-			printk("mem: kfree CANARY MISMATCH for ptr=%p hdr=%p hdr->size=%u id=%u expected=0x%08x got=0x%08x\n",
-			       ptr, hdr, hdr->size, tag,
-			       (unsigned)KMALLOC_CANARY, (unsigned)got);
 
 			uint8_t *user_ptr =
 				(uint8_t *)hdr + sizeof(block_header_t);
@@ -294,8 +291,7 @@ void kfree(void *ptr) {
 				ctx_len = user_bytes_with_canary + 8;
 			if (ctx_len > 64)
 				ctx_len = 64;
-			printk("mem: dumping %u bytes around canary (hex): ",
-			       ctx_len);
+
 			for (uint32_t i = 0; i < ctx_len; ++i) {
 				uint8_t v = ctx_start[i];
 				printk("%02x", v);
@@ -386,9 +382,6 @@ static int heap_expand(uint32_t additional_size) {
 
 	uintptr_t new_block_addr = heap_end_addr;
 
-	printk("mem: heap_expand creating block at 0x%08x size=%u (direct allocation, no frame alloc)\n",
-	       (uint32_t)new_block_addr, additional_size);
-
 	uint32_t flags = 0;
 	spin_lock_irqsave(&heap_lock, &flags);
 
@@ -416,12 +409,10 @@ static int heap_expand(uint32_t additional_size) {
 			/* Insert at head */
 			new_block->next = free_list;
 			free_list = new_block;
-			printk("mem: heap_expand inserted at head\n");
 		} else {
 			/* Insert after prev */
 			new_block->next = prev->next;
 			prev->next = new_block;
-			printk("mem: heap_expand inserted after 0x%p\n", prev);
 
 			/* Try to merge with previous block if adjacent */
 			uintptr_t prev_end = (uintptr_t)prev + prev->size;
@@ -468,9 +459,6 @@ static int heap_expand(uint32_t additional_size) {
 	*/
 
 	spin_unlock_irqrestore(&heap_lock, flags);
-
-	printk("mem: heap expanded by %u bytes, new heap_end=0x%08x\n",
-	       additional_size, (uint32_t)heap_end_addr);
 
 	return 0;
 }

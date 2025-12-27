@@ -804,9 +804,6 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 	uint32_t bytes_read = 0;
 	uint16_t cur = start_cluster;
 
-	printk("fat16_read_file: file_size=%u len=%u bytes_to_read=%u cluster_bytes=%u buf=%p\n",
-	       file_size, (unsigned)len, bytes_to_read, cluster_bytes, buf);
-
 	if (cluster_bytes > sizeof(fat16_cluster_scratch)) {
 		printk("fat16: cluster_bytes %u exceeds cluster_scratch size %u\n",
 		       cluster_bytes, (uint32_t)sizeof(fat16_cluster_scratch));
@@ -831,8 +828,6 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 		uint32_t copy = bytes_to_read - bytes_read;
 		if (copy > cluster_bytes)
 			copy = cluster_bytes;
-		printk("fat16_read_file: cluster=%u writing %u bytes to buf+%u (dest=%p)\n",
-		       cur, copy, bytes_read, (uint8_t *)buf + bytes_read);
 		mem_copy((uint8_t *)buf + bytes_read, cluster_buf, copy);
 		bytes_read += copy;
 		uint16_t next = fat_read_entry(sb, cur);
@@ -840,7 +835,7 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 			break;
 		cur = next;
 	}
-	printk("fat16_read_file: completed, total bytes_read=%u\n", bytes_read);
+	
 	if (out_len)
 		*out_len = bytes_read;
 	return 0;

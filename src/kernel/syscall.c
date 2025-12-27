@@ -80,7 +80,6 @@ static void sys_exit(int code) {
 #define PAGE_SIZE 0x1000u
 
 static uint64_t sys_sbrk(intptr_t inc) {
-	printk("SBRK START\n");
 	task_t *t = task_current();
 	if (!t) {
 		printk("SBRK: no task\n");
@@ -91,15 +90,15 @@ static uint64_t sys_sbrk(intptr_t inc) {
 		/* initialize program break base */
 		t->user_brk = (uint64_t)USER_HEAP_BASE;
 		t->user_brk_size = 0;
-		printk("SBRK: init heap at %llx\n",
-		       (unsigned long long)USER_HEAP_BASE);
+		printk("SBRK: init heap at 0x%lx\n",
+		       (unsigned long)USER_HEAP_BASE);
 	}
 
 	uint64_t current_brk = t->user_brk + t->user_brk_size;
 
 	if (inc == 0) {
 		/* return current program break */
-		printk("SBRK(0): ret=%llx\n", (unsigned long long)current_brk);
+		printk("SBRK(0): ret=0x%lx\n", (unsigned long)current_brk);
 		return current_brk;
 	}
 
@@ -109,33 +108,55 @@ static uint64_t sys_sbrk(intptr_t inc) {
 		return (uint64_t)-1;
 	}
 
-	printk("SBRK: brk=%llx inc=%lld\n", (unsigned long long)current_brk,
-	       (long long)inc);
+	printk("SBRK: brk=0x%lx inc=%ld\n", (unsigned long)current_brk,
+	       (long)inc);
 
 	uint64_t new_end = current_brk + (uint64_t)inc;
 
-	uint64_t prev_page = current_brk & ~(PAGE_SIZE - 1);
+	/* Calculate the next page boundary after current_brk */
+	/* If current_brk is page-aligned, start from the next page */
+	/* Otherwise, start from the page boundary after current_brk */
+	uint64_t first_new_page;
+	if ((current_brk & (PAGE_SIZE - 1)) == 0 && t->user_brk_size > 0) {
+		/* current_brk is page-aligned and we've allocated before */
+		first_new_page = current_brk;
+	} else {
+		/* Round up to next page boundary */
+		first_new_page = (current_brk + PAGE_SIZE - 1) &
+				 ~(PAGE_SIZE - 1);
+	}
+
 	uint64_t new_page_end = (new_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
 	uint32_t pages = 0;
-	if (new_page_end > prev_page)
-		pages = (uint32_t)((new_page_end - prev_page) / PAGE_SIZE);
+	if (new_page_end > first_new_page)
+		pages = (uint32_t)((new_page_end - first_new_page) / PAGE_SIZE);
+
+	printk("SBRK: first_new_page=0x%lx new_page_end=0x%lx\n",
+	       (unsigned long)first_new_page, (unsigned long)new_page_end);
 
 	if (pages == 0) {
 		/* no page boundary crossed, just increase size */
 		t->user_brk_size += (uint64_t)inc;
+		printk("SBRK: no new pages needed, old=0x%lx\n",
+		       (unsigned long)current_brk);
 		return current_brk;
 	}
 
+	printk("SBRK: allocating %u pages\n", pages);
+
 	/* allocate all frames first */
-	uint32_t *allocated_phys =
-		(uint32_t *)kmalloc(pages * sizeof(uint32_t));
-	if (!allocated_phys)
+	uint64_t *allocated_phys =
+		(uint64_t *)kmalloc(pages * sizeof(uint64_t));
+	if (!allocated_phys) {
+		printk("SBRK: kmalloc failed\n");
 		return (uint64_t)-1;
+	}
 
 	for (uint32_t i = 0; i < pages; ++i) {
 		void *frm = alloc_frame();
 		if (!frm) {
+			printk("SBRK: alloc_frame failed at page %u\n", i);
 			/* allocation failed - free previously allocated frames */
 			for (uint32_t j = 0; j < i; ++j)
 				free_frame(
@@ -143,17 +164,26 @@ static uint64_t sys_sbrk(intptr_t inc) {
 			kfree(allocated_phys);
 			return (uint64_t)-1;
 		}
-		allocated_phys[i] = (uint32_t)(uintptr_t)frm;
+		allocated_phys[i] = (uint64_t)(uintptr_t)frm;
+
+		/* Zero out the new page */
+		char *page_ptr = (char *)(uintptr_t)frm;
+		for (uint32_t j = 0; j < PAGE_SIZE; ++j)
+			page_ptr[j] = 0;
 	}
 
 	/* map frames into the task page directory */
-	uint64_t va = prev_page;
+	uint64_t va = first_new_page;
 	int map_failed = 0;
+	printk("SBRK: mapping %u pages starting at va=0x%lx\n", pages,
+	       (unsigned long)va);
 	for (uint32_t i = 0; i < pages; ++i, va += PAGE_SIZE) {
 		/* Use map_page_64 for 64-bit address space */
-		if (map_page_64(t->page_directory, (uint64_t)allocated_phys[i],
-				va, PAGING_PRESENT | PAGING_RW | PAGING_USER) !=
+		if (map_page_64(t->page_directory, allocated_phys[i], va,
+				PAGING_PRESENT | PAGING_RW | PAGING_USER) !=
 		    0) {
+			printk("SBRK: map_page_64 failed at va=0x%lx\n",
+			       (unsigned long)va);
 			map_failed = 1;
 			/* free remaining allocated frames */
 			for (uint32_t j = i; j < pages; ++j)
@@ -177,8 +207,8 @@ static uint64_t sys_sbrk(intptr_t inc) {
 	/* success - bump break size and return old break */
 	uint64_t old_brk = current_brk;
 	t->user_brk_size = new_end - t->user_brk;
-	printk("SBRK: OK old=%llx new=%llx pages=%u\n",
-	       (unsigned long long)old_brk, (unsigned long long)new_end, pages);
+	printk("SBRK: OK old=0x%lx new=0x%lx pages=%u\n",
+	       (unsigned long)old_brk, (unsigned long)new_end, pages);
 	return old_brk;
 }
 

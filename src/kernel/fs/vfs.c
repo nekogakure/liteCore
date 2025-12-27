@@ -58,8 +58,6 @@ static void free_global_handle(int idx) {
 	if (idx < 0 || idx >= MAX_OPEN_FILES)
 		return;
 	if (open_files[idx]) {
-		printk("free_global_handle: Freeing handle %d, buf=%p\n", idx,
-		       open_files[idx]->buf);
 		if (open_files[idx]->buf)
 			kfree(open_files[idx]->buf);
 		kfree(open_files[idx]);
@@ -322,16 +320,13 @@ int vfs_read(int fd, void *buf, size_t len) {
 			    active_backend->read_file) {
 				/* No extra padding needed - kmalloc handles canary internally */
 				uint32_t alloc_size = vf->buf_size;
-				printk("vfs_read: file='%s' alloc_size=%u\n",
-				       vf->path, alloc_size);
+
 				vf->buf = (uint8_t *)kmalloc(alloc_size);
 				if (!vf->buf) {
 					printk("vfs: failed to allocate %u bytes for '%s'\n",
 					       alloc_size, vf->path);
 					return -1;
 				}
-				printk("vfs_read: buffer allocated at %p\n",
-				       vf->buf);
 
 				/* Check canary before read */
 				uint32_t wanted = (alloc_size + 7) & ~7;
@@ -341,8 +336,6 @@ int vfs_read(int fd, void *buf, size_t len) {
 					(uint32_t *)((uintptr_t)vf->buf +
 						     wanted_with_canary - 4);
 				uint32_t canary_val_before = *canary_before;
-				printk("vfs_read: canary location=%p value=0x%08x (before read)\n",
-				       canary_before, canary_val_before);
 
 				vf->buf_allocated = alloc_size;
 				size_t out_len = 0;
@@ -350,13 +343,10 @@ int vfs_read(int fd, void *buf, size_t len) {
 				int rret = active_backend->read_file(
 					active_sb, vf->path, vf->buf,
 					vf->buf_size, &out_len);
-				printk("vfs_read: read_file returned %d, out_len=%u\n",
-				       rret, (unsigned)out_len);
 
 				/* Check canary after read */
 				uint32_t canary_val_after = *canary_before;
-				printk("vfs_read: canary value=0x%08x (after read)\n",
-				       canary_val_after);
+
 				if (canary_val_after != canary_val_before) {
 					printk("vfs_read: CANARY WAS MODIFIED! before=0x%08x after=0x%08x\n",
 					       canary_val_before,

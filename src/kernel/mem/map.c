@@ -196,14 +196,7 @@ void *alloc_frame(void) {
 
 						// Debug: Log allocations to detect heap collision
 						static int alloc_count = 0;
-						if (alloc_count < 30) {
-							printk("alloc_frame[%d]: frame=0x%lx addr=0x%lx\n",
-							       alloc_count,
-							       (uint64_t)
-								       frame_no,
-							       (uint64_t)(uintptr_t)
-								       addr);
-						}
+
 						alloc_count++;
 
 						spin_unlock_irqrestore(

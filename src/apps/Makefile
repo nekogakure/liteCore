@@ -18,8 +18,8 @@ CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable \
 LDFLAGS    = -nostdlib -static -no-pie
 USER_LDFLAGS = -L$(LIB_DIR) -lc
 
-# Source files - automatically detect all .c files
-APP_SOURCES = $(wildcard $(SRC_DIR)/*.c)
+# Source files - automatically detect all .c files (exclude linux_syscalls.c)
+APP_SOURCES = $(filter-out $(SRC_DIR)/linux_syscalls.c, $(wildcard $(SRC_DIR)/*.c))
 APP_OBJECTS = $(patsubst $(SRC_DIR)/%.c, $(OUT_DIR)/%.o, $(APP_SOURCES))
 APP_ELFS    = $(patsubst $(SRC_DIR)/%.c, $(OUT_DIR)/%.elf, $(APP_SOURCES))
 
@@ -91,6 +91,21 @@ $(OUT_DIR)/hello_simple.elf: $(OUT_DIR)/hello_simple.o
 	@mkdir -p $(dir $@)
 	@echo "Linking minimal hello_simple ELF: $@"
 	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
+
+# Linux-compatible builds (can run on host Linux for testing)
+linux-compat: $(OUT_DIR)/hello-linux
+	@echo "Built Linux-compatible binaries"
+
+$(OUT_DIR)/hello-linux: $(SRC_DIR)/hello.c $(LINUX_SYSCALLS_OBJ)
+	@mkdir -p $(dir $@)
+	@echo "Building Linux-compatible hello"
+	@$(CC) -O2 -m64 -Wall -Wextra -DLINUX_COMPAT -I$(LIB_DIR)/targ-include \
+		-c $(SRC_DIR)/hello.c -o $(OUT_DIR)/hello-linux.o
+	@$(CC) -static -no-pie $(OUT_DIR)/hello-linux.o $(LINUX_SYSCALLS_OBJ) \
+		-nostdlib -L$(LIB_DIR) -lc -o $@ || \
+	(echo "Trying with system libc..."; \
+	 $(CC) -O2 -m64 -Wall -Wextra $(SRC_DIR)/hello.c -o $@)
+	@echo "Created: $@ (can run on Linux)"
 
 clean:
 	rm -rf $(OUT_DIR)
