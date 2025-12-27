@@ -835,7 +835,7 @@ int fat16_read_file(struct fat16_super *sb, const char *name, void *buf,
 			break;
 		cur = next;
 	}
-	
+
 	if (out_len)
 		*out_len = bytes_read;
 	return 0;

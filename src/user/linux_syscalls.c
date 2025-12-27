@@ -1,11 +1,12 @@
-/* Linux-compatible syscalls wrapper for testing apps on host Linux */
-/* Also works on LiteCore kernel with Linux-compatible syscall numbers */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* Linux syscall numbers (also used by LiteCore) */
+#ifdef __litecore__
+struct _reent;
+#endif
+
 #define SYS_read 0
 #define SYS_write 1
 #define SYS_open 2
@@ -16,9 +17,9 @@
 #define SYS_getpid 39
 #define SYS_exit 60
 #define SYS_kill 62
-#define SYS_isatty 100 /* Custom for LiteCore */
+#define SYS_isatty 100
 #define SYS_arch_prctl 158
-#define SYS_get_reent 200 /* Custom LiteCore syscall */
+#define SYS_get_reent 200
 
 extern int errno;
 
@@ -192,14 +193,16 @@ int _kill(int pid, int sig) {
 }
 
 /* LiteCore-specific syscalls */
+#ifdef __litecore__
 __attribute__((constructor)) static void _newlib_reent_init(void) {
 	/* Try to use LiteCore's custom get_reent syscall */
 	const long alloc_size = 4096;
 	long r = linux_syscall6(SYS_get_reent, alloc_size, 0, 0, 0, 0, 0);
 	if (r == -1)
-		return; /* Not on LiteCore or allocation failed */
+		return; /* Allocation failed */
 
 	/* On LiteCore, set up _impure_ptr */
-	extern char _impure_ptr;
-	*(struct _reent **)&_impure_ptr = (struct _reent *)(uintptr_t)r;
+	extern struct _reent *_impure_ptr;
+	_impure_ptr = (struct _reent *)(uintptr_t)r;
 }
+#endif

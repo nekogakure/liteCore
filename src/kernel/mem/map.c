@@ -113,9 +113,9 @@ void memmap_init(uint64_t start, uint64_t end) {
 	/* clear any existing chunk list */
 	{
 		uint32_t flags = 0;
-		extern void spin_lock_irqsave(volatile uint32_t *lock,
-					      uint32_t *flagsptr);
-		extern void spin_unlock_irqrestore(volatile uint32_t *lock,
+		extern void spin_lock_irqsave(volatile uint32_t * lock,
+					      uint32_t * flagsptr);
+		extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 						   uint32_t flags);
 		spin_lock_irqsave(&memmap_lock_storage, &flags);
 		chunk_t *c = chunk_head;
@@ -148,9 +148,9 @@ void *alloc_frame(void) {
 	}
 
 	uint32_t flags = 0;
-	extern void spin_lock_irqsave(volatile uint32_t *lock,
-				      uint32_t *flagsptr);
-	extern void spin_unlock_irqrestore(volatile uint32_t *lock,
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+				      uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
 
@@ -244,9 +244,9 @@ void free_frame(void *addr) {
 	uint64_t local = idx % fpc;
 
 	uint32_t flags = 0;
-	extern void spin_lock_irqsave(volatile uint32_t *lock,
-				      uint32_t *flagsptr);
-	extern void spin_unlock_irqrestore(volatile uint32_t *lock,
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+				      uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
 	chunk_t *c = find_chunk(chi);
@@ -265,9 +265,9 @@ void free_frame(void *addr) {
 uint64_t frame_count(void) {
 	uint64_t f = 0;
 	uint32_t flags = 0;
-	extern void spin_lock_irqsave(volatile uint32_t *lock,
-				      uint32_t *flagsptr);
-	extern void spin_unlock_irqrestore(volatile uint32_t *lock,
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+				      uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
 	f = memmap.frames;
@@ -303,9 +303,9 @@ void memmap_reserve(uint64_t start, uint64_t end) {
 	uint64_t fpc = frames_per_chunk();
 
 	uint32_t flags = 0;
-	extern void spin_lock_irqsave(volatile uint32_t *lock,
-				      uint32_t *flagsptr);
-	extern void spin_unlock_irqrestore(volatile uint32_t *lock,
+	extern void spin_lock_irqsave(volatile uint32_t * lock,
+				      uint32_t * flagsptr);
+	extern void spin_unlock_irqrestore(volatile uint32_t * lock,
 					   uint32_t flags);
 	spin_lock_irqsave(&memmap_lock_storage, &flags);
 	for (uint64_t idx = s; idx < e; ++idx) {
