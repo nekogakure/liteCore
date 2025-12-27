@@ -1,8 +1,11 @@
+/* Linux-compatible syscalls wrapper for testing apps on host Linux */
+/* Also works on LiteCore kernel with Linux-compatible syscall numbers */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stddef.h>
 #include <stdint.h>
 
+/* Linux syscall numbers (also used by LiteCore) */
 #define SYS_read 0
 #define SYS_write 1
 #define SYS_open 2
@@ -11,8 +14,11 @@
 #define SYS_lseek 8
 #define SYS_brk 12
 #define SYS_getpid 39
+#define SYS_exit 60
 #define SYS_kill 62
+#define SYS_isatty 100 /* Custom for LiteCore */
 #define SYS_arch_prctl 158
+#define SYS_get_reent 200 /* Custom LiteCore syscall */
 
 extern int errno;
 
@@ -86,8 +92,11 @@ int _fstat(int fd, struct stat *st) {
 }
 
 int isatty(int fd) {
-	(void)fd;
-	return 1; /* Simple implementation */
+	/* Use custom LiteCore syscall if available, otherwise simple implementation */
+	long r = linux_syscall6(SYS_isatty, fd, 0, 0, 0, 0, 0);
+	if (r >= 0)
+		return (int)r;
+	return 1; /* Fallback */
 }
 
 int _isatty(int fd) {
@@ -122,7 +131,7 @@ int _open(const char *pathname, int flags, int mode) {
 }
 
 void _exit(int status) {
-	linux_syscall6(60, status, 0, 0, 0, 0, 0); /* SYS_exit = 60 on Linux */
+	linux_syscall6(SYS_exit, status, 0, 0, 0, 0, 0);
 	for (;;)
 		;
 }
@@ -180,4 +189,17 @@ int kill(int pid, int sig) {
 
 int _kill(int pid, int sig) {
 	return kill(pid, sig);
+}
+
+/* LiteCore-specific syscalls */
+__attribute__((constructor)) static void _newlib_reent_init(void) {
+	/* Try to use LiteCore's custom get_reent syscall */
+	const long alloc_size = 4096;
+	long r = linux_syscall6(SYS_get_reent, alloc_size, 0, 0, 0, 0, 0);
+	if (r == -1)
+		return; /* Not on LiteCore or allocation failed */
+
+	/* On LiteCore, set up _impure_ptr */
+	extern char _impure_ptr;
+	*(struct _reent **)&_impure_ptr = (struct _reent *)(uintptr_t)r;
 }

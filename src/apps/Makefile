@@ -31,8 +31,8 @@ CRT_OBJ = $(OUT_DIR)/crt.o
 SYSCALL_SRC = $(USER_DIR)/syscall.c
 SYSCALL_OBJ = $(OUT_DIR)/syscall.o
 
-# Newlib syscalls implementation
-NEWLIB_SYSCALLS_SRC = $(LIB_DIR)/newlib_syscalls.c
+# Syscalls implementation (Linux-compatible, works on both Linux and LiteCore)
+NEWLIB_SYSCALLS_SRC = $(USER_DIR)/linux_syscalls.c
 NEWLIB_SYSCALLS_OBJ = $(OUT_DIR)/newlib_syscalls.o
 
 # Stdio stub
@@ -92,20 +92,16 @@ $(OUT_DIR)/hello_simple.elf: $(OUT_DIR)/hello_simple.o
 	@echo "Linking minimal hello_simple ELF: $@"
 	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
 
-# Linux-compatible builds (can run on host Linux for testing)
+# Linux-compatible build target (now default)
 linux-compat: $(OUT_DIR)/hello-linux
-	@echo "Built Linux-compatible binaries"
+	@echo "Linux-compatible binaries are now built by default (all target)"
+	@echo "This target creates a simplified Linux-only build for testing"
 
-$(OUT_DIR)/hello-linux: $(SRC_DIR)/hello.c $(LINUX_SYSCALLS_OBJ)
+$(OUT_DIR)/hello-linux: $(SRC_DIR)/hello.c
 	@mkdir -p $(dir $@)
-	@echo "Building Linux-compatible hello"
-	@$(CC) -O2 -m64 -Wall -Wextra -DLINUX_COMPAT -I$(LIB_DIR)/targ-include \
-		-c $(SRC_DIR)/hello.c -o $(OUT_DIR)/hello-linux.o
-	@$(CC) -static -no-pie $(OUT_DIR)/hello-linux.o $(LINUX_SYSCALLS_OBJ) \
-		-nostdlib -L$(LIB_DIR) -lc -o $@ || \
-	(echo "Trying with system libc..."; \
-	 $(CC) -O2 -m64 -Wall -Wextra $(SRC_DIR)/hello.c -o $@)
-	@echo "Created: $@ (can run on Linux)"
+	@echo "Building simplified Linux-only hello"
+	@$(CC) -O2 -m64 -Wall -Wextra $(SRC_DIR)/hello.c -o $@
+	@echo "Created: $@ (Linux-only, uses glibc)"
 
 clean:
 	rm -rf $(OUT_DIR)

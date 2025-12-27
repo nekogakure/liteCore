@@ -19,8 +19,7 @@ CFLAGS     = -O2 -Wimplicit-function-declaration -Wunused-but-set-variable \
 # Linker flags
 LDFLAGS    = -nostdlib -static
 
-# Source files (only in src/user, excluding helper files)
-USER_SOURCES = $(shell find $(SRC_DIR) -maxdepth 1 -name "*.c" \! -name "syscall.c" \! -name "stdio_stub.c")
+USER_SOURCES = $(shell find $(SRC_DIR) -maxdepth 1 -name "*.c" \! -name "syscall.c" \! -name "stdio_stub.c" \! -name "linux_syscalls.c")
 USER_OBJECTS = $(patsubst $(SRC_DIR)/%.c, $(OUT_DIR)/%.o, $(USER_SOURCES))
 USER_ELFS    = $(patsubst $(SRC_DIR)/%.c, $(OUT_DIR)/%.elf, $(USER_SOURCES))
 
