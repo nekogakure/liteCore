@@ -38,71 +38,17 @@ NEWLIB_SYSCALLS_OBJ = $(OUT_DIR)/newlib_syscalls.o
 
 # Stdio stub
 STDIO_SRC = $(USER_DIR)/stdio_stub.c
-STDIO_OBJ = $(OUT_DIR)/stdio.o
 
-.PHONY: all clean
+# 各アプリケーションディレクトリを自動検出
+APP_DIRS := $(wildcard *.app)
 
-all: $(APP_ELFS)
-	@echo "Built app ELFs: $(APP_ELFS)"
+.PHONY: all clean $(APP_DIRS)
 
-# App object files
-$(OUT_DIR)/%.o: $(SRC_DIR)/%.c
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
+all: $(APP_DIRS)
 
-# CRT object
-$(CRT_OBJ): $(CRT_SRC)
-	@mkdir -p $(dir $@)
-	@$(NASM) -f elf64 $(CRT_SRC) -o $@
-
-# Syscall object
-$(SYSCALL_OBJ): $(SYSCALL_SRC)
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
-
-# Newlib syscalls object
-$(NEWLIB_SYSCALLS_OBJ): $(NEWLIB_SYSCALLS_SRC)
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
-
-# Stdio stub object
-$(STDIO_OBJ): $(STDIO_SRC)
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c $< -o $@
-
-# Link app ELFs with newlib
-$(OUT_DIR)/%.elf: $(OUT_DIR)/%.o $(CRT_OBJ) $(NEWLIB_SYSCALLS_OBJ) $(STDIO_OBJ)
-	@mkdir -p $(dir $@)
-	@echo "Linking app ELF: $@"
-	@if [ -f "$(LIB_DIR)/libc.a" ]; then \
-		$(CC) $(LDFLAGS) -Wl,--build-id=none $^ $(USER_LDFLAGS) -o $@; \
-	else \
-		echo "Warning: libc.a not found, linking without newlib"; \
-		$(CC) $(LDFLAGS) -Wl,--build-id=none $^ -o $@; \
-	fi
-
-# Special case: test.elf (minimal, no libc)
-$(OUT_DIR)/test.elf: $(OUT_DIR)/test.o
-	@mkdir -p $(dir $@)
-	@echo "Linking minimal test ELF: $@"
-	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
-
-# Special case: hello_simple.elf (minimal, no libc, direct syscalls)
-$(OUT_DIR)/hello_simple.elf: $(OUT_DIR)/hello_simple.o
-	@mkdir -p $(dir $@)
-	@echo "Linking minimal hello_simple ELF: $@"
-	@$(CC) -nostdlib -static -no-pie -Wl,--build-id=none $< -o $@
-
-# Linux-compatible build target (now default)
-linux-compat: $(OUT_DIR)/hello-linux
-	@echo "Linux-compatible binaries are now built by default (all target)"
-	@echo "This target creates a simplified Linux-only build for testing"
-
-$(OUT_DIR)/hello-linux: $(SRC_DIR)/hello.c
-	@mkdir -p $(dir $@)
-	@echo "Building simplified Linux-only hello"
-	@$(CC) -O2 -m64 -Wall -Wextra $(SRC_DIR)/hello.c -o $@
-	@echo "Created: $@ (Linux-only, uses glibc)"
+$(APP_DIRS):
+	$(MAKE) -C $@
 
 clean:
-	rm -rf $(OUT_DIR)
+	@for dir in $(APP_DIRS); do \
+	@mkdir -p $(dir $@)

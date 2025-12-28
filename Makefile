@@ -159,3 +159,6 @@ fmt:
 	@echo "Formatting..."
 	@./tools/fmt.sh
 	@echo "Done. :D"
+
+create-app:
+	@./tools/mkapp.sh

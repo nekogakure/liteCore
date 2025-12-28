@@ -1,0 +1,5 @@
+Shell
+1.0
+nekogakure<info@mail.nekogakure.jp>
+liteCore's shell.
+res/icon.png
