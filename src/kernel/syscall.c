@@ -9,6 +9,8 @@
 #include <mem/usercopy.h>
 #include <fs/vfs.h>
 #include <stdint.h>
+#include <errno.h>
+#include <task/elf.h>
 
 /* arch_prctl codes */
 #define ARCH_SET_GS 0x1001
@@ -272,24 +274,237 @@ static uint64_t sys_getpid(void) {
 	return (uint64_t)t->tid;
 }
 
+static uint64_t sys_fork(void) {
+	return (uint64_t)(-ENOSYS);
+}
+
 static uint64_t sys_kill(uint64_t pid, uint64_t sig) {
 	(void)sig;
-	/* Minimal implementation: accept any pid and return success (0).
-	 * Full implementation would locate task by TID and signal it.
-	 */
-	(void)pid;
+
+	if (pid == 0 || (int64_t)pid < 0)
+		return (uint64_t)(-EINVAL);
+	extern task_t *tasks[];
+	for (int i = 0; i < 64; ++i) {
+		task_t *t = tasks[i];
+		if (!t)
+			continue;
+		if (t->tid == (uint32_t)pid && t->state != TASK_STATE_DEAD) {
+			t->state = TASK_STATE_DEAD;
+
+			return 0;
+		}
+	}
+	// 見つからなければESRCH
+	return (uint64_t)(-ESRCH);
+}
+
+static uint64_t sys_execve(const char *pathname, char *const argv[],
+			   char *const envp[]) {
+	(void)argv;
+	(void)envp;
+	int ret = elf_run(pathname);
+	if (ret < 0)
+		return (uint64_t)(-ENOENT);
+	return 0;
+}
+
+static uint64_t sys_waitpid(int pid, int *wstatus, int options) {
+	(void)options;
+	task_t *self = task_current();
+	if (!self)
+		return (uint64_t)(-ENOSYS);
+	for (int i = 0; i < 64; ++i) {
+		extern task_t *tasks[];
+		task_t *t = tasks[i];
+		if (!t || t == self)
+			continue;
+		if ((pid == -1 || t->tid == (uint32_t)pid) &&
+		    t->state == TASK_STATE_DEAD) {
+			if (wstatus)
+				*wstatus = 0;
+			return t->tid;
+		}
+	}
+	task_yield();
+	return (uint64_t)(-EAGAIN);
+}
+
+static uint64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot,
+			 uint64_t flags, uint64_t fd, uint64_t offset) {
+	/* Full mmap: support anonymous and file-backed mappings, MAP_FIXED and hinting. */
+	const uint64_t MAP_FIXED = 0x10;
+	const uint64_t MAP_ANONYMOUS = 0x20;
+
+	if (length == 0)
+		return (uint64_t)-1;
+
+	uint64_t len = (length + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	uint32_t pages = (uint32_t)(len / PAGE_SIZE);
+
+	task_t *t = task_current();
+	if (!t)
+		return (uint64_t)-1;
+
+	uint64_t va = 0;
+
+	if (flags & MAP_FIXED) {
+		/* addr must be page-aligned and free */
+		if ((addr & (PAGE_SIZE - 1)) != 0)
+			return (uint64_t)-1;
+		if (!is_range_free_64(t->page_directory, addr, len))
+			return (uint64_t)-1;
+		va = addr;
+	} else {
+		/* try hint first if provided */
+		if (addr != 0 && (addr & (PAGE_SIZE - 1)) == 0) {
+			if (is_range_free_64(t->page_directory, addr, len))
+				va = addr;
+		}
+		if (va == 0) {
+			/* search from USER_HEAP_BASE upward */
+			uint64_t hint = (t->user_brk != 0) ? t->user_brk :
+							     USER_HEAP_BASE;
+			va = find_free_region_64(t->page_directory, hint, len);
+			if (va == 0)
+				return (uint64_t)-1;
+		}
+	}
+
+	/* Allocate physical frames */
+	uint64_t *allocated_phys =
+		(uint64_t *)kmalloc(pages * sizeof(uint64_t));
+	if (!allocated_phys)
+		return (uint64_t)-1;
+
+	for (uint32_t i = 0; i < pages; ++i) {
+		void *frm = alloc_frame();
+		if (!frm) {
+			for (uint32_t j = 0; j < i; ++j)
+				free_frame(
+					(void *)(uintptr_t)allocated_phys[j]);
+			kfree(allocated_phys);
+			return (uint64_t)-1;
+		}
+		allocated_phys[i] = (uint64_t)(uintptr_t)frm;
+		/* zero frame */
+		uint64_t kvirt = vmem_phys_to_virt64(allocated_phys[i]);
+		if (kvirt == UINT64_MAX) {
+			for (uint32_t j = 0; j <= i; ++j)
+				free_frame(
+					(void *)(uintptr_t)allocated_phys[j]);
+			kfree(allocated_phys);
+			return (uint64_t)-1;
+		}
+		for (uint32_t b = 0; b < PAGE_SIZE; ++b)
+			((uint8_t *)(uintptr_t)kvirt)[b] = 0;
+	}
+
+	/* Map frames into task page directory */
+	uint32_t page_flags = PAGING_PRESENT | PAGING_USER;
+	if (prot & 2)
+		page_flags |= PAGING_RW;
+
+	for (uint32_t i = 0; i < pages; ++i) {
+		uint64_t map_va = va + ((uint64_t)i * PAGE_SIZE);
+		if (map_page_64(t->page_directory, allocated_phys[i], map_va,
+				page_flags) != 0) {
+			/* cleanup */
+			for (uint32_t j = 0; j < pages; ++j) {
+				if (j <= i)
+					unmap_page_64(
+						t->page_directory,
+						va + ((uint64_t)j * PAGE_SIZE));
+				if (allocated_phys[j])
+					free_frame((void *)(uintptr_t)
+							   allocated_phys[j]);
+			}
+			kfree(allocated_phys);
+			return (uint64_t)-1;
+		}
+	}
+
+	/* If file-backed, fill pages from fd (per-task fd table) */
+	if (!(flags & MAP_ANONYMOUS)) {
+		/* seek to offset */
+		if (vfs_lseek((int)fd, (int64_t)offset, 0) < 0) {
+			/* not fatal: leave zero pages */
+		} else {
+			uint64_t remaining = len;
+			for (uint32_t i = 0; i < pages && remaining > 0; ++i) {
+				uint64_t phys = 0;
+				/* get phys from PTE by reading page table (pt entry)
+				 * We have allocated_phys array so use that. */
+				phys = allocated_phys[i];
+				uint64_t kvirt = vmem_phys_to_virt64(phys);
+				if (kvirt == UINT64_MAX)
+					continue;
+				size_t to_read = remaining > PAGE_SIZE ?
+							 PAGE_SIZE :
+							 (size_t)remaining;
+				int r = vfs_read((int)fd,
+						 (void *)(uintptr_t)kvirt,
+						 to_read);
+				if (r < 0) {
+					/* on read error leave zeros */
+				}
+				remaining -= to_read;
+			}
+		}
+	}
+
+	/* Apply NX if PROT_EXEC not set */
+	int exec = (prot & 4) ? 1 : 0;
+	for (uint32_t i = 0; i < pages; ++i) {
+		uint64_t map_va = va + ((uint64_t)i * PAGE_SIZE);
+		set_page_flags_64(t->page_directory, map_va, page_flags, exec);
+	}
+
+	kfree(allocated_phys);
+	return va;
+}
+
+static uint64_t sys_munmap(uint64_t addr, uint64_t length) {
+	if (length == 0)
+		return (uint64_t)-1;
+	uint64_t len = (length + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	task_t *t = task_current();
+	if (!t)
+		return (uint64_t)-1;
+	uint64_t va = addr;
+	uint64_t end = addr + len;
+	while (va < end) {
+		if (unmap_page_64(t->page_directory, va) != 0)
+			return (uint64_t)-1;
+		va += PAGE_SIZE;
+	}
+	return 0;
+}
+
+static uint64_t sys_mprotect(uint64_t addr, uint64_t length, uint64_t prot) {
+	if (length == 0)
+		return (uint64_t)-1;
+	uint64_t len = (length + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	task_t *t = task_current();
+	if (!t)
+		return (uint64_t)-1;
+	uint32_t page_flags = PAGING_PRESENT | PAGING_USER;
+	if (prot & 2)
+		page_flags |= PAGING_RW;
+	int exec = (prot & 4) ? 1 : 0;
+	uint64_t va = addr;
+	uint64_t end = addr + len;
+	while (va < end) {
+		if (set_page_flags_64(t->page_directory, va, page_flags,
+				      exec) != 0)
+			return (uint64_t)-1;
+		va += PAGE_SIZE;
+	}
 	return 0;
 }
 
 static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 				 uint64_t a2, uint64_t a3, uint64_t a4,
 				 uint64_t a5) {
-	(void)a1;
-	(void)a2;
-	(void)a3;
-	(void)a4;
-	(void)a5;
-
 	switch (num) {
 	case SYS_write:
 		return sys_write(a0, (const void *)a1, a2);
@@ -318,6 +533,19 @@ static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 		return sys_kill(a0, a1);
 	case SYS_arch_prctl:
 		return sys_arch_prctl((int)a0, a1);
+	case SYS_fork:
+		return sys_fork();
+	case SYS_execve:
+		return sys_execve((const char *)a0, (char *const *)a1,
+				  (char *const *)a2);
+	case SYS_waitpid:
+		return sys_waitpid((int)a0, (int *)a1, (int)a2);
+	case SYS_mmap:
+		return sys_mmap(a0, a1, a2, a3, a4, a5);
+	case SYS_munmap:
+		return sys_munmap(a0, a1);
+	case SYS_mprotect:
+		return sys_mprotect(a0, a1, a2);
 	default:
 		printk("SYSCALL: unknown syscall %llu\n",
 		       (unsigned long long)num);

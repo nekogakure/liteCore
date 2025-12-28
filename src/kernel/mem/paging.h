@@ -23,6 +23,13 @@ int map_range(uint32_t phys_start, uint32_t virt_start, size_t size,
 int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 		uint32_t flags);
 int map_page_current_64(uint64_t phys, uint64_t virt, uint32_t flags);
+int unmap_page_64(uint64_t pml4_phys, uint64_t virt);
+int unmap_page_current_64(uint64_t virt);
+int set_page_flags_64(uint64_t pml4_phys, uint64_t virt, uint32_t flags,
+		      int exec);
+int is_range_free_64(uint64_t pml4_phys, uint64_t virt, uint64_t length);
+uint64_t find_free_region_64(uint64_t pml4_phys, uint64_t start_hint,
+			     uint64_t length);
 void paging64_init_kernel_pml4(void);
 uint64_t paging64_create_user_pml4(void);
 uint64_t paging64_get_kernel_pml4(void);

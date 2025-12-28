@@ -22,6 +22,12 @@ struct _reent;
 #define SYS_isatty 100
 #define SYS_arch_prctl 158
 #define SYS_get_reent 200
+#define SYS_fork 201
+#define SYS_execve 202
+#define SYS_waitpid 203
+#define SYS_mmap 209
+#define SYS_munmap 210
+#define SYS_mprotect 211
 
 extern int errno;
 
@@ -194,7 +200,66 @@ int _kill(int pid, int sig) {
 	return kill(pid, sig);
 }
 
-/* LiteCore-specific syscalls */
+int fork(void) {
+	long r = linux_syscall6(SYS_fork, 0, 0, 0, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return (int)r;
+}
+
+int execve(const char *pathname, char *const argv[], char *const envp[]) {
+	long r = linux_syscall6(SYS_execve, (long)pathname, (long)argv,
+				(long)envp, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return (int)r;
+}
+
+int waitpid(int pid, int *wstatus, int options) {
+	long r = linux_syscall6(SYS_waitpid, pid, (long)wstatus, options, 0, 0,
+				0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return (int)r;
+}
+
+void *mmap(void *addr, size_t length, int prot, int flags, int fd,
+	   off_t offset) {
+	long r = linux_syscall6(SYS_mmap, (long)addr, (long)length, (long)prot,
+				(long)flags, (long)fd, (long)offset);
+	if (r < 0) {
+		errno = (int)-r;
+		return (void *)-1;
+	}
+	return (void *)(uintptr_t)r;
+}
+
+int munmap(void *addr, size_t length) {
+	long r = linux_syscall6(SYS_munmap, (long)addr, (long)length, 0, 0, 0,
+				0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return 0;
+}
+
+int mprotect(void *addr, size_t len, int prot) {
+	long r = linux_syscall6(SYS_mprotect, (long)addr, (long)len, (long)prot,
+				0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return 0;
+}
+
 #ifdef __litecore__
 
 __attribute__((constructor)) static void _newlib_reent_init(void) {

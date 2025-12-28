@@ -14,7 +14,7 @@ CRT_OBJ = $(OUT_DIR)/crt.o
 NEWLIB_SYSCALLS_OBJ = $(OUT_DIR)/newlib_syscalls.o
 STDIO_OBJ = $(OUT_DIR)/stdio.o
 
-ENTRY_SRC := $(shell grep -E '^[^#].+\\.c' .config | head -n1)
+ENTRY_SRC := $(shell awk '/^[ \t]*#/ {next} /^[ \t]*$$/ {next} { if ($$0 ~ /\.c$$/) { print $$1; exit } }' .config)
 ifeq ($(ENTRY_SRC),)
 $(error please specify an entry source file in .config)
 endif

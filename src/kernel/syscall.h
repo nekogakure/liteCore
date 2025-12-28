@@ -16,6 +16,12 @@
 #define SYS_isatty 100
 #define SYS_arch_prctl 158
 #define SYS_get_reent 200
+#define SYS_fork 201
+#define SYS_execve 202
+#define SYS_waitpid 203
+#define SYS_mmap 209
+#define SYS_munmap 210
+#define SYS_mprotect 211
 
 void syscall_entry_c(uint64_t *regs_stack, uint32_t vec);
 void syscall_init(void);

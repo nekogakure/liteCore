@@ -213,6 +213,207 @@ int map_page_64(uint64_t pml4_phys, uint64_t phys, uint64_t virt,
 }
 
 /**
+ * @brief 指定したPML4で仮想アドレスをアンマップする
+ * @return 0 成功, -1 失敗
+ */
+int unmap_page_64(uint64_t pml4_phys, uint64_t virt) {
+	uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+	uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+	uint64_t pd_idx = (virt >> 21) & 0x1FF;
+	uint64_t pt_idx = (virt >> 12) & 0x1FF;
+
+	uint64_t pml4_virt = vmem_phys_to_virt64(pml4_phys);
+	if (pml4_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
+
+	if ((pml4[pml4_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t pdpt_phys = pml4[pml4_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pdpt_virt = vmem_phys_to_virt64(pdpt_phys);
+	if (pdpt_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_virt;
+
+	if ((pdpt[pdpt_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t pd_phys = pdpt[pdpt_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pd_virt = vmem_phys_to_virt64(pd_phys);
+	if (pd_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pd = (uint64_t *)(uintptr_t)pd_virt;
+
+	if ((pd[pd_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	// large page は未対応
+	if (pd[pd_idx] & (1ULL << 7))
+		return -1;
+
+	uint64_t pt_phys = pd[pd_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pt_virt = vmem_phys_to_virt64(pt_phys);
+	if (pt_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pt = (uint64_t *)(uintptr_t)pt_virt;
+
+	if ((pt[pt_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t phys = pt[pt_idx] & 0xFFFFFFFFFFFFF000ULL;
+
+	// エントリをクリア
+	pt[pt_idx] = 0;
+
+	// TLB を無効化
+	invlpg((void *)(uintptr_t)virt);
+
+	// フレームを解放
+	free_frame((void *)(uintptr_t)phys);
+
+	return 0;
+}
+
+/**
+ * @brief 現在のCR3を使用してアンマップ
+ */
+int unmap_page_current_64(uint64_t virt) {
+	uint64_t cr3;
+	asm volatile("mov %%cr3, %0" : "=r"(cr3));
+	return unmap_page_64(cr3, virt);
+}
+/**
+ * @brief 指定範囲が未割り当てかどうかをチェックする
+ * @return 1: 未割り当て(自由), 0: 使用中/失敗
+ */
+int is_range_free_64(uint64_t pml4_phys, uint64_t virt, uint64_t length) {
+	if (length == 0)
+		return 0;
+	uint64_t end = virt + length;
+	for (uint64_t va = virt; va < end; va += 0x1000) {
+		uint64_t pml4_idx = (va >> 39) & 0x1FF;
+		uint64_t pdpt_idx = (va >> 30) & 0x1FF;
+		uint64_t pd_idx = (va >> 21) & 0x1FF;
+		uint64_t pt_idx = (va >> 12) & 0x1FF;
+
+		uint64_t pml4_virt = vmem_phys_to_virt64(pml4_phys);
+		if (pml4_virt == UINT64_MAX)
+			return 0;
+		uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
+		if ((pml4[pml4_idx] & PAGING_PRESENT) == 0)
+			continue; /* no mapping at this PML4 entry */
+
+		uint64_t pdpt_phys = pml4[pml4_idx] & 0xFFFFFFFFFFFFF000ULL;
+		uint64_t pdpt_virt = vmem_phys_to_virt64(pdpt_phys);
+		if (pdpt_virt == UINT64_MAX)
+			return 0;
+		uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_virt;
+		if ((pdpt[pdpt_idx] & PAGING_PRESENT) == 0)
+			continue;
+
+		uint64_t pd_phys = pdpt[pdpt_idx] & 0xFFFFFFFFFFFFF000ULL;
+		uint64_t pd_virt = vmem_phys_to_virt64(pd_phys);
+		if (pd_virt == UINT64_MAX)
+			return 0;
+		uint64_t *pd = (uint64_t *)(uintptr_t)pd_virt;
+		if ((pd[pd_idx] & PAGING_PRESENT) == 0)
+			continue;
+
+		/* If PD entry is a large page, region is occupied */
+		if (pd[pd_idx] & (1ULL << 7))
+			return 0;
+
+		uint64_t pt_phys = pd[pd_idx] & 0xFFFFFFFFFFFFF000ULL;
+		uint64_t pt_virt = vmem_phys_to_virt64(pt_phys);
+		if (pt_virt == UINT64_MAX)
+			return 0;
+		uint64_t *pt = (uint64_t *)(uintptr_t)pt_virt;
+		if ((pt[pt_idx] & PAGING_PRESENT) != 0)
+			return 0; /* page present -> occupied */
+	}
+	return 1;
+}
+
+/**
+ * @brief 指定ヒント位置から連続した未利用範囲を探索して返す
+ * @return 仮想アドレス(発見) / 0 (失敗)
+ */
+uint64_t find_free_region_64(uint64_t pml4_phys, uint64_t start_hint,
+			     uint64_t length) {
+	/* search up to user-space canonical limit */
+	uint64_t max_va = 0x00007ffffffff000ULL - length;
+	uint64_t va = start_hint & ~0xFFFULL;
+	for (; va <= max_va; va += 0x1000) {
+		if (is_range_free_64(pml4_phys, va, length))
+			return va;
+	}
+	return 0;
+}
+
+/**
+ * @brief 指定したPML4の仮想アドレスのページフラグを更新する
+ * @param exec 0 = 非実行 (NX set), 1 = 実行可能 (NX clear)
+ */
+int set_page_flags_64(uint64_t pml4_phys, uint64_t virt, uint32_t flags,
+		      int exec) {
+	uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+	uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+	uint64_t pd_idx = (virt >> 21) & 0x1FF;
+	uint64_t pt_idx = (virt >> 12) & 0x1FF;
+
+	uint64_t pml4_virt = vmem_phys_to_virt64(pml4_phys);
+	if (pml4_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
+
+	if ((pml4[pml4_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t pdpt_phys = pml4[pml4_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pdpt_virt = vmem_phys_to_virt64(pdpt_phys);
+	if (pdpt_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_virt;
+
+	if ((pdpt[pdpt_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t pd_phys = pdpt[pdpt_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pd_virt = vmem_phys_to_virt64(pd_phys);
+	if (pd_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pd = (uint64_t *)(uintptr_t)pd_virt;
+
+	if ((pd[pd_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	// large page は未対応
+	if (pd[pd_idx] & (1ULL << 7))
+		return -1;
+
+	uint64_t pt_phys = pd[pd_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t pt_virt = vmem_phys_to_virt64(pt_phys);
+	if (pt_virt == UINT64_MAX)
+		return -1;
+	uint64_t *pt = (uint64_t *)(uintptr_t)pt_virt;
+
+	if ((pt[pt_idx] & PAGING_PRESENT) == 0)
+		return -1;
+
+	uint64_t phys = pt[pt_idx] & 0xFFFFFFFFFFFFF000ULL;
+	uint64_t new_entry = (phys & 0xFFFFFFFFFFFFF000ULL) | (flags & 0xFFF);
+	if (exec)
+		new_entry &= ~(1ULL << 63);
+	else
+		new_entry |= (1ULL << 63);
+
+	pt[pt_idx] = new_entry;
+	invlpg((void *)(uintptr_t)virt);
+	return 0;
+}
+
+/**
  * @brief 現在のCR3（PML4）を使用してページをマッピング
  */
 int map_page_current_64(uint64_t phys, uint64_t virt, uint32_t flags) {

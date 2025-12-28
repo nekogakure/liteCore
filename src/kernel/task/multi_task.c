@@ -17,7 +17,7 @@ extern void task_restore(registers_t *new_regs);
 #define USER_STACK_SIZE 0x4000 // 16KB
 #define TIME_SLICE_DEFAULT 10 // 10 ticks
 
-static task_t *tasks[MAX_TASKS];
+task_t *tasks[MAX_TASKS];
 static task_t *current_task = NULL;
 static task_t *ready_queue_head = NULL;
 static task_t *ready_queue_tail = NULL;
