@@ -180,21 +180,37 @@ task_enter_usermode:
     mov r8, rdi    ; r8 = user RIP
     mov r9, rsi    ; r9 = user RSP
     mov r10, rdx   ; r10 = page directory
-    
     ; iretq用にスタックフレームを構成
     ; スタック: SS, RSP, RFLAGS, CS, RIP の順（逆順でプッシュ）
-    
-    pushfq         ; 現在のRFLAGSを保存
+
+    ; RFLAGS を取得して IF を立て、保存レジスタに保持
+    pushfq
     pop rax
-    or rax, 0x200  ; IF=1を確実にセット
-    
-    push 0x23      ; SS (ユーザーデータセグメント)
-    push r9        ; RSP (ユーザースタック、argc を指している)
-    push rax       ; RFLAGS (編集済み)
-    push 0x2B      ; CS (64-bit ユーザーコードセグメント 0x28 + RPL3)
-    push r8        ; RIP (エントリポイント、r8から復元)
-    
+    or rax, 0x200
+    mov r12, rax    ; r12 は callee-saved, ロガー呼び出し後も残る
+
+    ; ユーースタックと RIP を保存（後で push に使う）
+    mov r13, r9     ; r13 = user_stack
+    mov r14, r8     ; r14 = user_rip
+
+    ; ログ呼び出しのために引数をセット: (rip, rsp, cr3, ss, rflags, cs)
+    extern log_usermode_frame
+    mov rdi, r8     ; rip
+    mov rsi, r13    ; rsp
+    mov rdx, r10    ; cr3
+    mov rcx, 0x23   ; ss
+    mov r8, r12     ; rflags
+    mov r9, 0x2B    ; cs
+    call log_usermode_frame
+
+    ; ロガー呼び出し後、保存しておいた値を使って iret フレームを作成
+    push 0x23       ; SS (ユーザーデータセグメント)
+    push r13        ; RSP (ユーザースタック)
+    push r12        ; RFLAGS (編集済み)
+    push 0x2B       ; CS (64-bit ユーザーコードセグメント)
+    push r14        ; RIP (エントリポイント)
+
     mov cr3, r10
-    
+
     ; ユーザーモードへ移行
     iretq

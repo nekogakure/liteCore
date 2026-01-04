@@ -28,6 +28,9 @@ struct _reent;
 #define SYS_mmap 209
 #define SYS_munmap 210
 #define SYS_mprotect 211
+#define SYS_chdir 212
+#define SYS_getcwd 213
+#define SYS_listdir 214
 
 extern int errno;
 
@@ -41,10 +44,9 @@ static inline long linux_syscall6(long n, long a1, long a2, long a3, long a4,
 	register long r8 asm("r8") = a5;
 	register long r9 asm("r9") = a6;
 	asm volatile("syscall"
-		     : "+a"(rax), "+c"(rdi), "+S"(rsi), "+d"(rdx), "+r"(r10),
-		       "+r"(r8), "+r"(r9)
-		     :
-		     : "r11", "memory");
+		     : "+a"(rax)
+		     : "D"(rdi), "S"(rsi), "d"(rdx), "r"(r10), "r"(r8), "r"(r9)
+		     : "rcx", "r11", "memory");
 	return rax;
 }
 
@@ -200,6 +202,33 @@ int _kill(int pid, int sig) {
 	return kill(pid, sig);
 }
 
+int chdir(const char *path) {
+	long r = linux_syscall6(SYS_chdir, (long)path, 0, 0, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return 0;
+}
+
+char *getcwd(char *buf, size_t size) {
+	long r = linux_syscall6(SYS_getcwd, (long)buf, (long)size, 0, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return NULL;
+	}
+	return buf;
+}
+
+int listdir(const char *path) {
+	long r = linux_syscall6(SYS_listdir, (long)path, 0, 0, 0, 0, 0);
+	if (r < 0) {
+		errno = (int)-r;
+		return -1;
+	}
+	return 0;
+}
+
 int fork(void) {
 	long r = linux_syscall6(SYS_fork, 0, 0, 0, 0, 0, 0);
 	if (r < 0) {
@@ -278,6 +307,7 @@ __attribute__((constructor)) static void _newlib_reent_init(void) {
 	/* reent構造体のフィールドを初期化 */
 	_REENT_INIT_PTR(_impure_ptr);
 
+	extern void __sinit(struct _reent *r);
 	/* stdio初期化 */
 	__sinit(_impure_ptr);
 }

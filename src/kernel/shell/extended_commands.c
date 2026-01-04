@@ -595,6 +595,7 @@ static int cmd_run(int argc, char **argv) {
 	}
 	/* delegate ELF loading to shared loader */
 	extern int elf_run(const char *path);
+	printk("run: fullpath='%s'\n", fullpath);
 	int rc = elf_run(fullpath);
 	if (rc != 0) {
 		printk("run: elf_run failed (rc=%d)\n", rc);

@@ -15,6 +15,7 @@ int cmd_pwd(int argc, char **argv);
 int cmd_cd(int argc, char **argv);
 int cmd_ls(int argc, char **argv);
 int cmd_cat(int argc, char **argv);
+int listdir(const char *path);
 
 typedef int (*command_func_t)(int argc, char **argv);
 
@@ -24,17 +25,6 @@ typedef struct {
 	command_func_t function;
 } shell_command_t;
 
-shell_command_t commands[] = {
-	{ "help", "Display available commands", cmd_help },
-	{ "echo", "Echo arguments to console", cmd_echo },
-	{ "clear", "Clear the console screen", cmd_clear },
-	{ "info", "Show app info (manifest.txt)", cmd_info },
-	{ "exit", "Exit the shell", cmd_exit },
-	{ "pwd", "Print current directory", cmd_pwd },
-	{ "cd", "Change directory", cmd_cd },
-	{ "ls", "List files", cmd_ls },
-	{ "cat", "Show file contents", cmd_cat },
-	{ NULL, NULL, NULL }
-};
+extern shell_command_t commands[];
 
 #endif // APP_SHELL_CMDS_LIST_H

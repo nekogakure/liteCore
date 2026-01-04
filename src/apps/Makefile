@@ -44,11 +44,25 @@ APP_DIRS := $(wildcard *.app)
 
 .PHONY: all clean $(APP_DIRS)
 
-all: $(APP_DIRS)
+all: $(CRT_OBJ) $(NEWLIB_SYSCALLS_OBJ) $(OUT_DIR)/stdio.o $(APP_DIRS)
 
 $(APP_DIRS):
 	$(MAKE) -C $@
 
 clean:
 	@for dir in $(APP_DIRS); do \
+		$(MAKE) -C $$dir clean || true; \
+	done
+	@rm -rf $(OUT_DIR)
+# Ensure CRT and helper objects for apps exist in OUT_DIR
+$(OUT_DIR)/crt.o: $(CRT_SRC)
 	@mkdir -p $(dir $@)
+	@$(NASM) -f elf64 $< -o $@
+
+$(OUT_DIR)/newlib_syscalls.o: $(NEWLIB_SYSCALLS_SRC)
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OUT_DIR)/stdio.o: $(STDIO_SRC)
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -c $< -o $@

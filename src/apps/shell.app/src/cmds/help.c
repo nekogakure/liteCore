@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include "../main.c"
 #include "list.h"
 
 extern shell_command_t commands[];

@@ -293,6 +293,92 @@ int elf_run(const char *path) {
 
 	vfs_close(fd);
 
+	/* Debug: verify that entry VA is mapped in the new page directory and dump first bytes */
+	{
+		uint64_t va = header.entry;
+		uint64_t pml4_idx = (va >> 39) & 0x1FF;
+		uint64_t pdpt_idx = (va >> 30) & 0x1FF;
+		uint64_t pd_idx = (va >> 21) & 0x1FF;
+		uint64_t pt_idx = (va >> 12) & 0x1FF;
+
+		uint64_t pml4_virt = vmem_phys_to_virt64(pd_phys);
+		if (pml4_virt != UINT64_MAX) {
+			uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_virt;
+			if ((pml4[pml4_idx] & PAGING_PRESENT) != 0) {
+				uint64_t pdpt_phys = pml4[pml4_idx] &
+						     0xFFFFFFFFFFFFF000ULL;
+				uint64_t pdpt_virt =
+					vmem_phys_to_virt64(pdpt_phys);
+				if (pdpt_virt != UINT64_MAX) {
+					uint64_t *pdpt = (uint64_t *)(uintptr_t)
+						pdpt_virt;
+					if ((pdpt[pdpt_idx] & PAGING_PRESENT) !=
+					    0) {
+						uint64_t pd_phys_local =
+							pdpt[pdpt_idx] &
+							0xFFFFFFFFFFFFF000ULL;
+						uint64_t pd_virt_local =
+							vmem_phys_to_virt64(
+								pd_phys_local);
+						if (pd_virt_local !=
+						    UINT64_MAX) {
+							uint64_t *pd =
+								(uint64_t *)(uintptr_t)
+									pd_virt_local;
+							if ((pd[pd_idx] &
+							     PAGING_PRESENT) !=
+								    0 &&
+							    !(pd[pd_idx] &
+							      (1ULL << 7))) {
+								uint64_t pt_phys =
+									pd[pd_idx] &
+									0xFFFFFFFFFFFFF000ULL;
+								uint64_t pt_virt = vmem_phys_to_virt64(
+									pt_phys);
+								if (pt_virt !=
+								    UINT64_MAX) {
+									uint64_t *pt =
+										(uint64_t
+											 *)(uintptr_t)
+											pt_virt;
+									if ((pt[pt_idx] &
+									     PAGING_PRESENT) !=
+									    0) {
+										uint64_t phys =
+											pt[pt_idx] &
+											0xFFFFFFFFFFFFF000ULL;
+										uint64_t kvirt = vmem_phys_to_virt64(
+											phys);
+										if (kvirt !=
+										    UINT64_MAX) {
+											unsigned char *p =
+												(unsigned char
+													 *)(uintptr_t)
+													kvirt +
+												(va &
+												 0xFFF);
+											printk("ELF: entry bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+											       p[0],
+											       p[1],
+											       p[2],
+											       p[3],
+											       p[4],
+											       p[5],
+											       p[6],
+											       p[7]);
+										} else {
+											printk("ELF: Cannot convert entry phys to kvirt\n");
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// TSSにカーネルスタックを設定
 	// ユーザーモードから例外/割り込みが発生した時のスタックポインタ
 	uint64_t kernel_stack;
@@ -328,6 +414,11 @@ int elf_run(const char *path) {
 		     : [fnaddr] "r"(fnaddr), [a1] "r"(header.entry),
 		       [a2] "r"(user_stack_top), [a3] "r"(pd_phys)
 		     : "rax", "rdi", "rsi", "rdx");
+
+	/* Debug: print snapshot values so we can see what will be used for iretq */
+	printk("ELF: entering usermode: entry=0x%lx user_sp=0x%lx pd_phys=0x%lx\n",
+	       (unsigned long)elf_call_snapshot_func_addr,
+	       (unsigned long)elf_call_snapshot_rsp, (unsigned long)pd_phys);
 
 	// ここには戻ってこないはず
 	printk("ELF: ERROR - returned from usermode!\n");

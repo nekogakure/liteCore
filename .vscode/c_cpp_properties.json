@@ -4,6 +4,7 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/src/kernel",
+                "${workspaceFolder}/src/user/include",
                 "${workspaceFolder}/uefi/MdePkg/Include",
                 "${workspaceFolder}/uefi/MdePkg/Include/X64",
                 "${workspaceFolder}/uefi/MdePkg/Library/MipiSysTLib/mipisyst/library/include",

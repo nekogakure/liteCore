@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
+#include <core/sys.h>
 #include "list.h"
 
 extern char current_path[256];
@@ -9,16 +10,10 @@ extern char current_path[256];
 int cmd_ls(int argc, char **argv) {
 	(void)argc;
 	(void)argv;
-	DIR *dir = opendir(current_path);
-	if (!dir) {
-		printf("ls: cannot open directory\n");
+	/* Use kernel-backed listing helper (prints via kernel console) */
+	if (listdir(current_path) != 0) {
+		printf("ls: cannot list directory\n");
 		return -1;
 	}
-	struct dirent *entry;
-	while ((entry = readdir(dir)) != NULL) {
-		printf("%s  ", entry->d_name);
-	}
-	printf("\n");
-	closedir(dir);
 	return 0;
 }

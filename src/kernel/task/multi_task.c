@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <fs/vfs.h>
+#include <proc/proc.h>
 
 // IRQ から直接タスクを復元するためのアセンブリ関数
 extern void task_restore(registers_t *new_regs);
@@ -79,6 +80,9 @@ void task_init(void) {
 		tasks[i] = NULL;
 	}
 
+	/* initialize proc table */
+	proc_init();
+
 	ready_queue_head = NULL;
 	ready_queue_tail = NULL;
 
@@ -122,6 +126,8 @@ void task_init(void) {
 
 	current_task = &idle_task;
 	tasks[0] = &idle_task;
+	/* register idle task in proc table */
+	proc_create(idle_task.tid);
 
 	scheduler_enabled = 1;
 
@@ -131,6 +137,8 @@ void task_init(void) {
 	idle_task.fds[0] = 0; /* stdin */
 	idle_task.fds[1] = 1; /* stdout */
 	idle_task.fds[2] = 2; /* stderr */
+	/* set default working directory in proc table */
+	proc_set_cwd(idle_task.tid, "/");
 	vfs_init();
 #ifdef INIT_MSG
 	printk("task_init: Multitasking initialized. Current context saved as idle task (TID=0, CR3=0x%lx)\n",
@@ -273,6 +281,15 @@ task_t *task_create(void (*entry)(void), const char *name, int kernel_mode) {
 	}
 
 	tasks[slot] = task;
+	/* register process entry and inherit cwd from current process */
+	proc_create(task->tid);
+	if (task_current()) {
+		const char *src = proc_get_cwd(task_current()->tid);
+		if (src)
+			proc_set_cwd(task->tid, src);
+	} else {
+		proc_set_cwd(task->tid, "/");
+	}
 
 #ifdef INIT_MSG
 	printk("task_create: Created task '%s' (TID=%u)\n", name,
@@ -419,6 +436,8 @@ void task_exit(void) {
 	uint64_t flags = irq_save();
 
 	if (current_task) {
+		/* remove proc entry for this task */
+		proc_remove(current_task->tid);
 		current_task->state = TASK_STATE_DEAD;
 	}
 

@@ -539,12 +539,6 @@ int vfs_read_file_all(const char *path, void **out_buf, uint32_t *out_size) {
 			*out_size = 0;
 			return 0;
 		}
-		{
-			uint32_t heap_free = heap_free_bytes();
-			uint32_t heap_largest = heap_largest_free_block();
-			/* Allocate extra space aligned to page boundary for safety */
-			uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
-		}
 		/* Allocate page-aligned buffer to avoid memory corruption issues */
 		uint32_t alloc_size = ((sz + 4095) / 4096) * 4096;
 		buf = (void *)kmalloc((size_t)alloc_size);

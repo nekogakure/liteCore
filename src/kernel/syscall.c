@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <task/elf.h>
+#include <proc/proc.h>
 
 /* arch_prctl codes */
 #define ARCH_SET_GS 0x1001
@@ -502,6 +503,57 @@ static uint64_t sys_mprotect(uint64_t addr, uint64_t length, uint64_t prot) {
 	return 0;
 }
 
+static uint64_t sys_chdir(const char *path_ptr) {
+	if (!path_ptr)
+		return (uint64_t)-1;
+	char kpath[256];
+	if (copy_from_user(kpath, (void *)path_ptr, sizeof(kpath)) != 0)
+		return (uint64_t)-1;
+	kpath[sizeof(kpath) - 1] = '\0';
+	int is_dir = 0;
+	if (vfs_resolve_path(kpath, &is_dir, NULL) != 0)
+		return (uint64_t)-1;
+	if (!is_dir)
+		return (uint64_t)-1;
+	task_t *t = task_current();
+	if (!t)
+		return (uint64_t)-1;
+	if (proc_set_cwd(t->tid, kpath) != 0)
+		return (uint64_t)-1;
+	return 0;
+}
+
+static uint64_t sys_getcwd(char *buf, uint64_t size) {
+	if (!buf || size == 0)
+		return (uint64_t)-1;
+	task_t *t = task_current();
+	if (!t)
+		return (uint64_t)-1;
+	const char *cwd = proc_get_cwd(t->tid);
+	if (!cwd)
+		return (uint64_t)-1;
+	size_t len = 0;
+	while (cwd[len] && len < size - 1)
+		len++;
+	/* copy len+1 (including NUL) */
+	if (copy_to_user(buf, (void *)cwd, len + 1) != 0)
+		return (uint64_t)-1;
+	return 0;
+}
+
+static uint64_t sys_listdir(const char *path_ptr) {
+	if (!path_ptr)
+		return (uint64_t)-1;
+	char kpath[256];
+	if (copy_from_user(kpath, (void *)path_ptr, sizeof(kpath)) != 0)
+		return (uint64_t)-1;
+	kpath[sizeof(kpath) - 1] = '\0';
+	/* Delegate to VFS's printed listing (debug-friendly) */
+	if (vfs_list_path(kpath) != 0)
+		return (uint64_t)-1;
+	return 0;
+}
+
 static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 				 uint64_t a2, uint64_t a3, uint64_t a4,
 				 uint64_t a5) {
@@ -546,6 +598,12 @@ static uint64_t dispatch_syscall(uint64_t num, uint64_t a0, uint64_t a1,
 		return sys_munmap(a0, a1);
 	case SYS_mprotect:
 		return sys_mprotect(a0, a1, a2);
+	case SYS_chdir:
+		return sys_chdir((const char *)a0);
+	case SYS_getcwd:
+		return sys_getcwd((char *)a0, a1);
+	case SYS_listdir:
+		return sys_listdir((const char *)a0);
 	default:
 		printk("SYSCALL: unknown syscall %llu\n",
 		       (unsigned long long)num);
@@ -558,9 +616,10 @@ void syscall_entry_c(uint64_t *regs_stack, uint32_t vec) {
 	uint64_t num = regs_stack[0];
 
 	/* Debug: Print syscall info */
-	// printk("SYSCALL: num=%llu rdi=%llx rsi=%llx rdx=%llx\n",
-	//        (unsigned long long)num, (unsigned long long)regs_stack[6],
-	//        (unsigned long long)regs_stack[5], (unsigned long long)regs_stack[2]);
+	printk("SYSCALL_ENTER: num=%llu rdi=0x%llx rsi=0x%llx rdx=0x%llx\n",
+	       (unsigned long long)num, (unsigned long long)regs_stack[6],
+	       (unsigned long long)regs_stack[5],
+	       (unsigned long long)regs_stack[2]);
 
 	/* some registers are not used by our syscall dispatch; suppress warnings */
 	(void)vec;
